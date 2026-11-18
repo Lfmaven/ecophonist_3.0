@@ -1,4 +1,4 @@
-# Manual de Instalação Segura para Usuários do GitHub
+# Manual de Instalação Segura
 
 Este guia orienta como clonar, auditar, configurar e executar o **Ecophonist** localmente com total segurança após baixar o projeto pelo GitHub.
 
