@@ -83,7 +83,7 @@ No menu de **Configurações & Arsenal**, é possível ajustar:
 - Web Audio API procedural (síntese de passos, vento, trovões, sonar inimigo e análise opcional de microfone)
 - Tailwind CSS v4 + Lucide Icons
 
-## Instalação Segura (Usuários do GitHub)
+## Instalação Segura
 
 Para clonar e executar localmente com proteção contra scripts de terceiros (`--ignore-scripts`), verificação estática de código e cabeçalhos HTTP reforçados:
 
