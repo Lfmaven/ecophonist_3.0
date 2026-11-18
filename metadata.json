@@ -1,0 +1,8 @@
+{
+  "name": "Ecophonist",
+  "description": "Stealth acústico e sobrevivência em um mundo sombrio iluminado por ondas sonoras.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
