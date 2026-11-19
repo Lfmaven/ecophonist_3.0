@@ -57,11 +57,51 @@ const ECOLOGY_THEMES: Record<number, EcologyTheme> = {
       'Aproveite a chuva torrencial para avançar rápido e ative [R] Canto do Silêncio em corredores fechados.',
     icon: 'storm',
   },
+  4: {
+    biomeLabel: 'Ecologia Sonora · Viaduto do Cuanza (Bermuda)',
+    tuningStatus: 'Rastreando Zona Segura, airdrops e patrulhas de concreto...',
+    colors: ['#F59E0B', '#38BDF8', '#94A3B8'],
+    colorLabels: ['Airdrop Bermuda', 'Lâmina Sônica', 'Vento de Viaduto'],
+    waveFrequency: 0.032,
+    waveSpeed: 3.9,
+    windBias: 'Zona Segura Rápida · Coletes e Airdrops',
+    ecologyTags: ['Viaduto 2800m', 'Sentinela Blindado', 'Zona Segura Acelerada'],
+    tacticalTip:
+      'Colete coletes táticos nas caixas e use [1] Sonic Leap para cruzar corredores entre os muros de concreto.',
+    icon: 'wind',
+  },
+  5: {
+    biomeLabel: 'Ecologia Sonora · Cidadela de Benguela (Purgatório)',
+    tuningStatus: 'Mapeando neblina densa e ruídos do Colosso Gleam-Eyes...',
+    colors: ['#A855F7', '#38BDF8', '#CBD5E1'],
+    colorLabels: ['Aura Gleam-Eyes', 'Névoa de Benguela', 'Sonar Purgatório'],
+    waveFrequency: 0.035,
+    waveSpeed: 4.1,
+    windBias: 'Neblina Densa · Mini-Radar Essencial',
+    ecologyTags: ['Gleam-Eyes da Huíla', 'Sereias em Vigília', 'Neblina do Namibe'],
+    tacticalTip:
+      'Use o Mini-Radar no canto direito para localizar Airdrops Lendários e quebre a postura de Gleam-Eyes com [2] Vorpal Strike.',
+    icon: 'fog',
+  },
+  6: {
+    biomeLabel: 'Ecologia Sonora · Pináculo Aincrad-Kalahari',
+    tuningStatus: 'Sincronizando Andar Final e barreiras do Arquiteto Carmesim...',
+    colors: ['#F43F5E', '#FBBF24', '#22D3EE'],
+    colorLabels: ['Arquiteto Carmesim', 'Elixir Dourado', 'Vácuo Aincrad'],
+    waveFrequency: 0.038,
+    waveSpeed: 4.4,
+    windBias: 'Tempestade Extrema · 5 Barras de Chefe',
+    ecologyTags: ['Andar Final SAO', 'Arquiteto Carmesim', 'Airdrops Supremos'],
+    tacticalTip:
+      'Recupere vida com [H] Kit Médico, desvie do golpe AoE vermelho com [1] Sonic Leap e finalize com [2] Vorpal Strike.',
+    icon: 'storm',
+  },
 };
 
-function hexToRgb(hex: string): [number, number, number] {
-  const clean = hex.replace('#', '');
+function hexToRgb(hex: string = '#22D3EE'): [number, number, number] {
+  const clean = (hex || '#22D3EE').replace('#', '');
   const n = parseInt(clean, 16);
+  if (Number.isNaN(n)) return [34, 211, 238];
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
@@ -112,7 +152,7 @@ export const AcousticLoadingScreen: React.FC<AcousticLoadingScreenProps> = ({
     const startMs = performance.now();
 
     const frame = (now: number) => {
-      const elapsed = now - startMs;
+      const elapsed = Math.max(0, now - startMs);
       const pct = Math.min(1, elapsed / LOAD_DURATION_MS);
       setProgress(Math.round(pct * 100));
 
@@ -129,9 +169,9 @@ export const AcousticLoadingScreen: React.FC<AcousticLoadingScreenProps> = ({
 
           // Blend between the 3 Ecology colors smoothly as sound waves propagate
           const cycle = (elapsed * 0.00085) % 3;
-          const idxA = Math.floor(cycle) % 3;
+          const idxA = ((Math.floor(cycle) % 3) + 3) % 3;
           const idxB = (idxA + 1) % 3;
-          const blendT = cycle - Math.floor(cycle);
+          const blendT = Math.max(0, Math.min(1, cycle - Math.floor(cycle)));
           const primaryColor = lerpColor(theme.colors[idxA], theme.colors[idxB], blendT);
           const secondaryColor = lerpColor(
             theme.colors[(idxA + 1) % 3],
@@ -215,7 +255,7 @@ export const AcousticLoadingScreen: React.FC<AcousticLoadingScreenProps> = ({
 
   return (
     <div
-      className="h-screen w-full bg-[#07090F] text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden select-none"
+      className="min-h-dvh w-full bg-[#07090F] text-slate-100 flex flex-col items-center justify-center px-4 py-6 sm:p-6 relative overflow-y-auto overflow-x-hidden select-none"
       role="status"
       aria-live="polite"
       aria-label={`Carregando ${level.title}`}
@@ -239,6 +279,10 @@ export const AcousticLoadingScreen: React.FC<AcousticLoadingScreenProps> = ({
         {/* Title & Active Character */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
+            <p className="text-[11px] font-mono-tabular font-semibold tracking-widest uppercase text-cyan-300">
+              {level.sectorTag} · {level.worldWidth} px
+              {level.boss ? ` · Chefe: ${level.boss.name}` : ''}
+            </p>
             <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white leading-tight">
               {level.title}
             </h1>

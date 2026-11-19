@@ -54,11 +54,31 @@ export const SOUND_RECORDS: SoundRecordDef[] = [
   {
     id: 'campeao_da_tundavala',
     title: 'Voz da Tundavala',
-    condition: 'Conclua o Ato III (Fenda da Tundavala) em até 75s com pelo menos 2 cristais.',
+    condition: 'Conclua o Ato III (Fenda da Tundavala) em até 135s com pelo menos 2 cristais.',
     rewardLabel: '+5 Fragmentos de Eco · Passivo: Passo de Nzinga',
     passiveBonus: '+8% na velocidade ao mover-se agachado',
     shardReward: 5,
     accentColor: '#F43F5E',
+    iconName: 'award',
+  },
+  {
+    id: 'cacador_de_andar',
+    title: 'Quebrador de Andar',
+    condition: 'Derrote qualquer Chefe de Andar SAO abrindo pelo menos 2 Caixas de Suprimento.',
+    rewardLabel: '+4 Fragmentos de Eco · Passivo: Lâmina Ressonante',
+    passiveBonus: '+18% na regeneração natural de Energia de Sword Skill',
+    shardReward: 4,
+    accentColor: '#A855F7',
+    iconName: 'sparkles',
+  },
+  {
+    id: 'lenda_do_pinaculo',
+    title: 'Sobrevivente do Pináculo',
+    condition: 'Vença o Ato VI (Pináculo Aincrad-Kalahari) e liberte o último andar.',
+    rewardLabel: '+6 Fragmentos de Eco · Passivo: Égide da Zona Segura',
+    passiveBonus: '+1 Escudo Colete Tático inicial em toda missão',
+    shardReward: 6,
+    accentColor: '#F59E0B',
     iconName: 'award',
   },
 ];
@@ -74,6 +94,8 @@ export interface RunFeatEvaluationInput {
   birdsScared: number;
   maskedSteps: number;
   weatherSeen: WeatherEventType[];
+  bossDefeated: boolean;
+  cratesOpened: number;
 }
 
 export function evaluateEarnedSoundRecords(input: RunFeatEvaluationInput): SoundRecordId[] {
@@ -98,8 +120,14 @@ export function evaluateEarnedSoundRecords(input: RunFeatEvaluationInput): Sound
   if (input.stonesDiverted >= 3 && input.birdsScared === 0) {
     earned.push('mestre_das_iscas');
   }
-  if (input.levelId === 3 && input.timeSec <= 75 && input.crystals >= 2) {
+  if (input.levelId === 3 && input.timeSec <= 135 && input.crystals >= 2) {
     earned.push('campeao_da_tundavala');
+  }
+  if (input.bossDefeated && input.cratesOpened >= 2) {
+    earned.push('cacador_de_andar');
+  }
+  if (input.levelId === 6 && input.bossDefeated) {
+    earned.push('lenda_do_pinaculo');
   }
 
   return earned;

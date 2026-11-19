@@ -4,6 +4,17 @@ import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
 
+const ROOT_DIR = import.meta.dirname;
+
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+  'Permissions-Policy':
+    'camera=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), microphone=(self)',
+};
+
 export default defineConfig(() => {
   return {
     plugins: [
@@ -19,8 +30,8 @@ export default defineConfig(() => {
           if (error) {
             return;
           }
-          const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
+          const distDir = path.resolve(ROOT_DIR, 'dist');
+          const srcAssets = path.resolve(ROOT_DIR, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
@@ -30,7 +41,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(ROOT_DIR, '.'),
       },
     },
     server: {
@@ -39,15 +50,12 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      headers: SECURITY_HEADERS,
     },
     preview: {
       port: 3000,
       strictPort: true,
-      headers: {
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'strict-origin-when-cross-origin',
-        'Permissions-Policy': 'camera=(), geolocation=(), microphone=(self)',
-      },
+      headers: SECURITY_HEADERS,
     },
   };
 });

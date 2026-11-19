@@ -89,14 +89,20 @@ if (!VERIFY_ONLY) {
 }
 
 // 4. Varredura estática de segurança no código-fonte
-logStep('4/5', 'Executando varredura estática de segurança em src/ e index.html...');
+logStep('4/5', 'Executando varredura estática de segurança em src/, index.html e vite.config.ts...');
 const DANGEROUS_PATTERNS = [
   { name: 'eval()', regex: /\beval\s*\(/ },
   { name: 'new Function()', regex: /\bnew\s+Function\s*\(/ },
   { name: 'dangerouslySetInnerHTML', regex: /dangerouslySetInnerHTML/ },
   { name: 'innerHTML assignment', regex: /\.innerHTML\s*=/ },
+  { name: 'outerHTML assignment', regex: /\.outerHTML\s*=/ },
+  { name: 'insertAdjacentHTML()', regex: /\.insertAdjacentHTML\s*\(/ },
   { name: 'document.write()', regex: /document\.write\s*\(/ },
+  { name: 'window.open()', regex: /window\.open\s*\(/ },
+  { name: 'window.alert()', regex: /window\.alert\s*\(/ },
   { name: 'Hardcoded Google API Key', regex: /AIza[0-9A-Za-z_-]{35}/ },
+  { name: 'Hardcoded OpenAI/Stripe-style Key', regex: /\bsk-[A-Za-z0-9]{20,}/ },
+  { name: 'Hardcoded GitHub Token', regex: /\bgh[pousr]_[A-Za-z0-9]{24,}/ },
   { name: 'Private Key Block', regex: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
 ];
 
@@ -117,6 +123,7 @@ function collectFiles(dir) {
 const filesToScan = [
   ...collectFiles(path.join(ROOT, 'src')),
   path.join(ROOT, 'index.html'),
+  path.join(ROOT, 'vite.config.ts'),
 ];
 
 const findings = [];
@@ -127,6 +134,25 @@ for (const filePath of filesToScan) {
     if (rule.regex.test(content)) {
       findings.push(`${path.relative(ROOT, filePath)} -> ${rule.name}`);
     }
+  }
+}
+
+if (fs.existsSync(envPath)) {
+  const envText = fs.readFileSync(envPath, 'utf8');
+  if (/AIza[0-9A-Za-z_-]{35}|\bsk-[A-Za-z0-9]{20,}|\bgh[pousr]_[A-Za-z0-9]{24,}|PRIVATE KEY-----/.test(envText)) {
+    findings.push('.env -> Possível chave privada ou token detectado');
+  }
+}
+
+if (!fs.existsSync(path.join(ROOT, 'SECURITY.md'))) {
+  findings.push('SECURITY.md -> Arquivo de política de segurança ausente');
+}
+
+const indexHtmlPath = path.join(ROOT, 'index.html');
+if (fs.existsSync(indexHtmlPath)) {
+  const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
+  if (!indexHtml.includes('Content-Security-Policy')) {
+    findings.push('index.html -> Meta tag Content-Security-Policy ausente');
   }
 }
 

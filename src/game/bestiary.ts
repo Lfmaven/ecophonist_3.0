@@ -1,4 +1,10 @@
-export type BestiaryCreatureId = 'stalker' | 'wraith' | 'goliath' | 'weavers';
+export type BestiaryCreatureId =
+  | 'stalker'
+  | 'wraith'
+  | 'goliath'
+  | 'weavers'
+  | 'boss_kagachi'
+  | 'boss_architect';
 
 export interface BestiaryEntry {
   id: BestiaryCreatureId;
@@ -32,7 +38,7 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     threatLabel: 'Ameaça Alta',
     accentColor: '#FB7185',
     artwork: '/src/assets/images/bestiary_stalker_sound_1794990574258.jpg',
-    actsFound: 'Atos I, II e III',
+    actsFound: 'Atos I a VI',
     soundSignature: {
       waveform: 'Dente de Serra Cortante',
       frequencyHz: '280 – 880 Hz',
@@ -51,7 +57,7 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     survivalTactics: [
       'Agache (C) ao cruzar corredores estreitos para cortar o raio dos seus passos.',
       'Use pedras de isca (Q ou clique) para desviá-lo da rota de patrulha.',
-      'Segure o fôlego (Espaço) quando suas orelhas brilharem perto de você.',
+      'Ative [2] Corte Ressonante se estiver cercado para atordoá-lo por 4 segundos.',
     ],
   },
   {
@@ -61,7 +67,7 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     threatLabel: 'Ameaça Crítica',
     accentColor: '#C084FC',
     artwork: '/src/assets/images/bestiary_wraith_sound_1794990575591.jpg',
-    actsFound: 'Atos II e III',
+    actsFound: 'Atos II a VI',
     soundSignature: {
       waveform: 'Senoidal Harmônica Dupla',
       frequencyHz: '690 – 1.480 Hz',
@@ -78,9 +84,9 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     acousticBehavior:
       'Ao entrar em estado de caçada, solta um grito harmônico que atravessa obstáculos em ondas violeta de 440 px, elevando imediatamente a suspeita de outros predadores próximos.',
     survivalTactics: [
-      'Ergue cortinas de Sussurro na Folha (E) entre você e a Sereia para bloquear seus ecos.',
-      'Evite provocar revoadas de aves enquanto houver uma Sereia no setor.',
-      'No Ato III, ative o Canto do Silêncio (R) para atravessar sua zona de escuta sem gerar ondas.',
+      'Erga cortinas de Sussurro na Folha (E) entre você e a Sereia para bloquear seus ecos.',
+      'Use [1] Passo Relâmpago para atravessar sua área de cobertura antes do grito de alarme.',
+      'Ative o Canto do Silêncio (R) em setores de alta densidade no Purgatório e Pináculo.',
     ],
   },
   {
@@ -90,7 +96,7 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     threatLabel: 'Ameaça Extrema',
     accentColor: '#FBBF24',
     artwork: '/src/assets/images/bestiary_goliath_sound_1794990575353.jpg',
-    actsFound: 'Atos II e III',
+    actsFound: 'Atos II a VI',
     soundSignature: {
       waveform: 'Sub-Grave Triangular Sísmica',
       frequencyHz: '42 – 130 Hz',
@@ -119,7 +125,7 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     threatLabel: 'Catalisador Ambiental',
     accentColor: '#F472B6',
     artwork: '/src/assets/images/bestiary_weavers_sound_1794990575748.jpg',
-    actsFound: 'Atos I, II e III',
+    actsFound: 'Atos I a VI',
     soundSignature: {
       waveform: 'Coro Agudo em Cascata',
       frequencyHz: '1.600 – 2.400 Hz',
@@ -138,7 +144,65 @@ export const BESTIARY_ENTRIES: BestiaryEntry[] = [
     survivalTactics: [
       'Caminhe agachado ou espere a brisa dos imbondeiros ao passar perto dos ninhos.',
       'Propositalmente acerte um seixo no bando para criar uma distração gigante longe da saída.',
-      'Use o flash acústico da revoada para mapear obstáculos ocultos no escuro.',
+      'Use o flash acústico da revoada para mapear caixas de suprimento e obstáculos ocultos.',
+    ],
+  },
+  {
+    id: 'boss_kagachi',
+    name: 'Guardiões de Andar (Kagachi & Gleam-Eyes)',
+    classification: 'Chefe de Andar SAO · Postura Blindada',
+    threatLabel: 'Chefe Guardião',
+    accentColor: '#A855F7',
+    artwork: '/src/assets/images/bestiary_goliath_sound_1794990575353.jpg',
+    actsFound: 'Atos I a V (Santuário Final)',
+    soundSignature: {
+      waveform: 'Pulso Sísmico Multi-Banda',
+      frequencyHz: '55 – 640 Hz',
+      cadenceSec: '1,8 s',
+      hearingRadius: '440 px',
+      speedPatrol: '64 px/s',
+      speedHunt: '158 px/s',
+      waveType: 'triangle',
+      baseFreq: 1.4,
+      harmonics: 5,
+    },
+    ecologySummary:
+      'Titãs acústicos que selam o Portal do Santuário nos setores avançados. Combinam blindagem pesada de múltiplas barras de vida (estilo Aincrad) com ondas de choque telegrafadas no solo.',
+    acousticBehavior:
+      'Carregam círculos de impacto sônico visíveis no chão por 1,25 segundos antes de detonar. Quando sua postura é quebrada por Sword Skills ou pedras certeiras, ficam atordoados e vulneráveis.',
+    survivalTactics: [
+      'Saia do círculo de alerta vermelho usando [1] Passo Relâmpago no último instante.',
+      'Use [2] Corte Ressonante para quebrar a barra de postura e abrir janela de dano crítico.',
+      'Arremesse Seixos de Isca diretamente no Chefe para desestabilizá-lo à distância.',
+    ],
+  },
+  {
+    id: 'boss_architect',
+    name: 'Arquiteto Carmesim do Silêncio',
+    classification: 'Chefe Supremo · Andar 06 Aincrad-Kalahari',
+    threatLabel: 'Ameaça Omega (5 Barras)',
+    accentColor: '#F43F5E',
+    artwork: '/src/assets/images/bestiary_wraith_sound_1794990575591.jpg',
+    actsFound: 'Ato VI · Pináculo Aincrad-Kalahari',
+    soundSignature: {
+      waveform: 'Ressonância Carmesim Dupla',
+      frequencyHz: '90 – 1.720 Hz',
+      cadenceSec: '1,35 s',
+      hearingRadius: '510 px',
+      speedPatrol: '78 px/s',
+      speedHunt: '185 px/s',
+      waveType: 'sawtooth',
+      baseFreq: 3.1,
+      harmonics: 6,
+    },
+    ecologySummary:
+      'O Guardião definitivo do Pináculo de Aincrad-Kalahari. Possui cinco camadas de vitalidade segmentada e sincroniza ataques de área com o fechamento da Zona Segura.',
+    acousticBehavior:
+      'Alterna perseguição precisa com explosões harmônicas de grande raio que revelam toda a arena enquanto tenta encurralar sobreviventes fora da Zona Segura.',
+    survivalTactics: [
+      'Abra as Caixas de Suprimento Lendárias antes da arena para garantir Colete Tático e Kits Médicos [H].',
+      'Combine [R] Canto do Silêncio com [2] Corte Ressonante para atacar sem atrair rastreadores secundários.',
+      'Mantenha-se dentro do anel azul da Zona Segura enquanto circula os pilares da arena.',
     ],
   },
 ];

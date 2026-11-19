@@ -20,10 +20,20 @@ export const SoundBestiaryModal: React.FC<SoundBestiaryModalProps> = ({ onClose 
     boostRef.current = pulseBoost;
   }, [pulseBoost]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const handlePreviewSound = () => {
     soundEngine.unlock();
     if (entry.id === 'weavers') {
       soundEngine.playBirdFlock();
+    } else if (entry.id === 'boss_kagachi' || entry.id === 'boss_architect') {
+      soundEngine.playBossRoar();
     } else {
       soundEngine.playEnemySonar(entry.id, true);
     }
@@ -115,10 +125,13 @@ export const SoundBestiaryModal: React.FC<SoundBestiaryModalProps> = ({ onClose 
       role="dialog"
       aria-modal="true"
       aria-labelledby="bestiary-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="max-w-5xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="max-w-5xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2 id="bestiary-title" className="font-display text-2xl font-extrabold text-white">
               Bestiário Sonoro

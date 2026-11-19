@@ -9,19 +9,24 @@ import {
   CharacterId,
   CharacterProfile,
   Enemy,
+  FloorBossState,
   GameSettings,
   HUDTelemetry,
   LeafWhisperZone,
   LevelConfig,
+  LootPickupToast,
   Obstacle,
   OnomatopoeiaSFX,
   PlayerState,
   ResonanceCrystal,
+  SafeZoneStage,
   SilenceBubble,
+  SlashArcEffect,
   SoundDiaryDef,
   SoundRecordId,
   SoundWave,
   StoreItemId,
+  SupplyCrateState,
   ThrownStone,
   Vec2,
   WeatherEventType,
@@ -151,6 +156,36 @@ export class EcophonistEngine {
   private crystals: ResonanceCrystal[] = [];
   private diaries: Array<SoundDiaryDef & { collected: boolean; pulsePhase: number; beaconTimer: number }> = [];
   private enemies: Enemy[] = [];
+  private supplyCrates: SupplyCrateState[] = [];
+  private boss: FloorBossState | null = null;
+  private slashEffects: SlashArcEffect[] = [];
+  private recentLootToast: LootPickupToast | null = null;
+  private lootToastTimer = 0;
+
+  // Free Fire Safe Zone state
+  private safeZone = {
+    x: 1400,
+    y: 550,
+    radius: 1620,
+    startX: 1400,
+    startY: 550,
+    startRadius: 1620,
+    targetX: 1950,
+    targetY: 550,
+    targetRadius: 1180,
+    stageIndex: 0,
+    phase: 'estavel' as 'estavel' | 'fechando',
+    phaseTimer: 24,
+    phaseDuration: 24,
+    damagePerSec: 0.16,
+    outsideDamageAcc: 0,
+    playerOutside: false,
+    lockedFinal: false,
+    warningPlayedStage: -1,
+    stormStaticTimer: 1.5,
+    stealthRotationTimer: 0,
+  };
+
   private waves: SoundWave[] = [];
   private breathParticles: BreathParticle[] = [];
   private onomatopoeias: OnomatopoeiaSFX[] = [];
@@ -175,7 +210,7 @@ export class EcophonistEngine {
   private viewHeight = 620;
   private screenShake = 0;
 
-  // Settings, Character & Paid Items
+  // Settings, Character & Earned Tools
   private settings: GameSettings;
   private equippedItems: Set<StoreItemId>;
   private character: CharacterProfile;
@@ -189,6 +224,8 @@ export class EcophonistEngine {
   private stonesDiverted = 0;
   private birdsScared = 0;
   private maskedSteps = 0;
+  private cratesOpened = 0;
+  private bossDefeated = false;
   private weatherSeen = new Set<WeatherEventType>();
   private stationaryNearEnemyTimer = 0;
   private activeCamouflageHint: CamouflageQuickHint | null = null;
@@ -200,8 +237,10 @@ export class EcophonistEngine {
   private stepComboCooldown = 0;
   private breathHoldComboProgress = 0;
 
-  // Virtual joystick / touch move vector
+  // Virtual joystick / touch move vector & touch toggles
   private touchMoveVec: Vec2 = { x: 0, y: 0 };
+  private touchCrouch = false;
+  private touchSprint = false;
 
   constructor(
     level: LevelConfig,
@@ -305,6 +344,60 @@ export class EcophonistEngine {
     };
   }
 
+  private getSafeZoneEdgeMetrics(): {
+    edgeProximity: number;
+    closingSeverity: number;
+    edgeSignedDist: number;
+  } {
+    if (this.level.safeZoneStages.length === 0) {
+      return { edgeProximity: 0, closingSeverity: 0, edgeSignedDist: 9999 };
+    }
+    const dSafe = dist(this.player.x, this.player.y, this.safeZone.x, this.safeZone.y);
+    const edgeSignedDist = this.safeZone.radius - dSafe; // >0 inside, <=0 outside
+    const proximitySpan = 360;
+    const edgeProximity = clamp(1 - edgeSignedDist / proximitySpan, 0, 1);
+
+    const totalStages = Math.max(1, this.level.safeZoneStages.length - 1);
+    const stageRatio = clamp(this.safeZone.stageIndex / totalStages, 0, 1);
+    const shrinkProgress =
+      this.safeZone.phase === 'fechando'
+        ? clamp(
+            1 - this.safeZone.phaseTimer / Math.max(0.1, this.safeZone.phaseDuration),
+            0,
+            1
+          )
+        : 0;
+
+    // 0 = calm cyan blue -> 1 = aggressive crimson red as zone closes or player approaches/leaves edge
+    let closingSeverity =
+      stageRatio * 0.35 +
+      (this.safeZone.phase === 'fechando' ? 0.38 + shrinkProgress * 0.44 : 0) +
+      (this.safeZone.lockedFinal ? 0.45 : 0);
+
+    if (edgeProximity > 0.72 && this.safeZone.phase === 'fechando') {
+      closingSeverity += (edgeProximity - 0.72) * 0.65;
+    }
+    if (this.safeZone.playerOutside) {
+      closingSeverity = 1;
+    }
+
+    return {
+      edgeProximity,
+      closingSeverity: clamp(closingSeverity, 0, 1),
+      edgeSignedDist,
+    };
+  }
+
+  private getDifficultyMult(): { hearing: number; speed: number; zoneSpeed: number; stormDmg: number } {
+    if (this.settings.difficulty === 'aincrad') {
+      return { hearing: 1.32, speed: 1.24, zoneSpeed: 1.22, stormDmg: 1.35 };
+    }
+    if (this.settings.difficulty === 'implacavel') {
+      return { hearing: 1.22, speed: 1.15, zoneSpeed: 1.12, stormDmg: 1.18 };
+    }
+    return { hearing: 1.0, speed: 1.0, zoneSpeed: 1.0, stormDmg: 1.0 };
+  }
+
   private createInitialPlayer(level: LevelConfig): PlayerState {
     const trail: Vec2[] = [];
     for (let i = 0; i < 8; i++) {
@@ -316,6 +409,7 @@ export class EcophonistEngine {
       this.character.bonuses.extraStones +
       bonusStone;
     const maxHp = this.character.bonuses.maxHp;
+    const startArmor = this.unlockedRecords.has('lenda_do_pinaculo') ? 1 : 0;
     return {
       x: level.playerStart.x,
       y: level.playerStart.y,
@@ -325,7 +419,11 @@ export class EcophonistEngine {
       radius: this.character.id === 'kimbamba' ? 17 : 15,
       hp: maxHp,
       maxHp,
+      armorShield: startArmor,
+      maxArmorShield: 3,
+      medkits: 1,
       breath: 100,
+      swordEnergy: 65,
       isHoldingBreath: false,
       breathGasping: 0,
       isSprinting: false,
@@ -341,13 +439,20 @@ export class EcophonistEngine {
       whisperMaxCooldown: Math.round(11 * this.character.bonuses.cooldownMult * 10) / 10,
       silenceCooldown: 0,
       silenceMaxCooldown: Math.round(16 * this.character.bonuses.cooldownMult * 10) / 10,
+      sonicLeapCooldown: 0,
+      sonicLeapMaxCooldown: 4.2,
+      vorpalSlashCooldown: 0,
+      vorpalSlashMaxCooldown: 6.0,
+      dashTimer: 0,
+      dashVx: 0,
+      dashVy: 0,
       invulnerableTimer: 0,
       scarfTrail: trail,
     };
   }
 
   private initEntities(level: LevelConfig): void {
-    this.obstacles = level.obstacles.map((o) => ({ ...o, discoveredAlpha: 0.14 }));
+    this.obstacles = level.obstacles.map((o) => ({ ...o, discoveredAlpha: 0.22 }));
     this.windZones = level.windZones.map((w) => ({
       ...w,
       isActive: false,
@@ -367,6 +472,11 @@ export class EcophonistEngine {
       ...c,
       collected: false,
       pulsePhase: idx * 1.4,
+    }));
+    this.supplyCrates = level.supplyCrates.map((cr, idx) => ({
+      ...cr,
+      opened: false,
+      pulsePhase: idx * 1.1,
     }));
     this.diaries = getDiariesForLevel(level.id).map((d, idx) => ({
       ...d,
@@ -403,9 +513,77 @@ export class EcophonistEngine {
         hearingRadius: spec.hearing,
         speedPatrol: spec.spPatrol,
         speedHunt: spec.spHunt,
-        revealedAlpha: 0.15,
+        revealedAlpha: 0.18,
+        stunnedTimer: 0,
       };
     });
+
+    if (level.boss) {
+      const b = level.boss;
+      this.boss = {
+        ...b,
+        hp: b.maxHp,
+        stance: 100,
+        maxStance: 100,
+        defeated: false,
+        vx: 0,
+        vy: 0,
+        angle: Math.PI,
+        patrolIndex: b.patrolPoints.length > 1 ? 1 : 0,
+        state: 'patrol',
+        suspicion: 0,
+        targetPos: null,
+        stateTimer: 0,
+        sonarTimer: 1.4,
+        telegraphTimer: 0,
+        telegraphMaxTimer: 1.25,
+        telegraphCooldown: 3.6,
+        telegraphX: b.x,
+        telegraphY: b.y,
+        telegraphRadius: 125,
+        stunnedTimer: 0,
+        revealedAlpha: 0.45,
+        hurtFlash: 0,
+      };
+      this.bossDefeated = false;
+    } else {
+      this.boss = null;
+      this.bossDefeated = true;
+    }
+
+    // Initialize Safe Zone from Stage 0
+    const firstStage: SafeZoneStage = level.safeZoneStages[0] ?? {
+      waitDurationSec: 25,
+      shrinkDurationSec: 18,
+      center: { x: level.exitPos.x - 200, y: level.exitPos.y },
+      radius: 900,
+      damagePerSec: 0.18,
+    };
+    const diffMult = this.getDifficultyMult();
+    const waitSec = firstStage.waitDurationSec / diffMult.zoneSpeed;
+    const initialRadius = Math.max(1580, Math.round(Math.hypot(level.worldWidth * 0.5, level.worldHeight * 0.5) + 80));
+    this.safeZone = {
+      x: level.worldWidth * 0.5,
+      y: level.worldHeight * 0.5,
+      radius: initialRadius,
+      startX: level.worldWidth * 0.5,
+      startY: level.worldHeight * 0.5,
+      startRadius: initialRadius,
+      targetX: firstStage.center.x,
+      targetY: firstStage.center.y,
+      targetRadius: firstStage.radius,
+      stageIndex: 0,
+      phase: 'estavel',
+      phaseTimer: waitSec,
+      phaseDuration: waitSec,
+      damagePerSec: firstStage.damagePerSec,
+      outsideDamageAcc: 0,
+      playerOutside: false,
+      lockedFinal: false,
+      warningPlayedStage: -1,
+      stormStaticTimer: 1.5,
+      stealthRotationTimer: 0,
+    };
 
     // Place the remaining 4 Angolan squad companions at start camp & sanctuary exit
     const others = CHARACTERS.filter((c) => c.id !== this.character.id);
@@ -426,7 +604,7 @@ export class EcophonistEngine {
     this.spawnWave(
       level.exitPos.x,
       level.exitPos.y,
-      240,
+      280,
       140,
       '#22D3EE',
       'exit',
@@ -447,10 +625,25 @@ export class EcophonistEngine {
   public clearKeys(): void {
     this.keys.clear();
     this.touchMoveVec = { x: 0, y: 0 };
+    this.touchSprint = false;
   }
 
   public setTouchMove(dx: number, dy: number): void {
     this.touchMoveVec = { x: clamp(dx, -1, 1), y: clamp(dy, -1, 1) };
+  }
+
+  public setTouchCrouch(active: boolean): void {
+    this.touchCrouch = active;
+    if (active) {
+      this.touchSprint = false;
+    }
+  }
+
+  public setTouchSprint(active: boolean): void {
+    this.touchSprint = active;
+    if (active) {
+      this.touchCrouch = false;
+    }
   }
 
   public setHoldBreath(active: boolean): void {
@@ -549,6 +742,277 @@ export class EcophonistEngine {
     soundEngine.playSilenceChant();
     this.registerStealthCombo('Canto do Silêncio', 8);
     this.spawnOnomatopoeia('「SILÊNCIO」', this.player.x, this.player.y - 34, '#38BDF8');
+  }
+
+  public triggerSonicLeap(): void {
+    if (this.finished) return;
+    const p = this.player;
+    if (p.sonicLeapCooldown > 0) return;
+    if (p.swordEnergy < 25) {
+      this.spawnOnomatopoeia('「SEM ENERGIA」', p.x, p.y - 26, '#94A3B8');
+      return;
+    }
+
+    p.swordEnergy = Math.max(0, p.swordEnergy - 25);
+    p.sonicLeapCooldown = p.sonicLeapMaxCooldown;
+
+    let dx = 0;
+    let dy = 0;
+    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) dy -= 1;
+    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) dy += 1;
+    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) dx -= 1;
+    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) dx += 1;
+    if (dx === 0 && dy === 0) {
+      dx = this.touchMoveVec.x;
+      dy = this.touchMoveVec.y;
+    }
+    const dashAngle = Math.hypot(dx, dy) > 0.15 ? Math.atan2(dy, dx) : p.angle;
+    p.angle = dashAngle;
+    p.dashTimer = 0.22;
+    p.dashVx = Math.cos(dashAngle) * 560;
+    p.dashVy = Math.sin(dashAngle) * 560;
+    p.invulnerableTimer = Math.max(p.invulnerableTimer, 0.36);
+
+    const strikeX = p.x + Math.cos(dashAngle) * 54;
+    const strikeY = p.y + Math.sin(dashAngle) * 54;
+
+    this.slashEffects.push({
+      id: this.nextId++,
+      x: strikeX,
+      y: strikeY,
+      angle: dashAngle,
+      radius: 82,
+      color: '#38BDF8',
+      life: 0,
+      maxLife: 0.34,
+      kind: 'sonic_leap',
+    });
+
+    soundEngine.playSwordSkill('leap');
+    this.registerStealthCombo('Sonic Leap', 4);
+    this.spawnWave(p.x, p.y, 210, 260, '#38BDF8', 'sword', 40, true, 2.4);
+    this.spawnOnomatopoeia('「SONIC LEAP!」', p.x, p.y - 30, '#38BDF8');
+
+    for (const enemy of this.enemies) {
+      if (dist(strikeX, strikeY, enemy.x, enemy.y) <= enemy.radius + 76) {
+        enemy.stunnedTimer = Math.max(enemy.stunnedTimer, 2.6);
+        enemy.state = 'patrol';
+        enemy.suspicion = 0;
+        enemy.targetPos = null;
+        enemy.revealedAlpha = 1;
+        this.spawnOnomatopoeia('「ATORDOADO!」', enemy.x, enemy.y - enemy.radius - 16, '#38BDF8');
+      }
+    }
+
+    if (
+      this.boss &&
+      !this.boss.defeated &&
+      dist(strikeX, strikeY, this.boss.x, this.boss.y) <= this.boss.radius + 88
+    ) {
+      const dmg = this.boss.stunnedTimer > 0 ? 52 : 34;
+      this.damageBoss(dmg, 28);
+    }
+  }
+
+  public triggerVorpalSlash(): void {
+    if (this.finished) return;
+    const p = this.player;
+    if (p.vorpalSlashCooldown > 0) return;
+    if (p.swordEnergy < 40) {
+      this.spawnOnomatopoeia('「SEM ENERGIA」', p.x, p.y - 26, '#94A3B8');
+      return;
+    }
+
+    p.swordEnergy = Math.max(0, p.swordEnergy - 40);
+    p.vorpalSlashCooldown = p.vorpalSlashMaxCooldown;
+    p.invulnerableTimer = Math.max(p.invulnerableTimer, 0.28);
+
+    let slashAngle = p.angle;
+    if (this.boss && !this.boss.defeated && dist(p.x, p.y, this.boss.x, this.boss.y) <= 230) {
+      slashAngle = Math.atan2(this.boss.y - p.y, this.boss.x - p.x);
+      p.angle = slashAngle;
+    }
+
+    this.slashEffects.push({
+      id: this.nextId++,
+      x: p.x,
+      y: p.y,
+      angle: slashAngle,
+      radius: 145,
+      color: '#F43F5E',
+      life: 0,
+      maxLife: 0.42,
+      kind: 'vorpal_slash',
+    });
+
+    this.screenShake = Math.max(this.screenShake, 7);
+    soundEngine.playSwordSkill('vorpal');
+    this.registerStealthCombo('Vorpal Strike', 6);
+    this.spawnWave(p.x, p.y, 260, 290, '#F43F5E', 'sword', 56, false, 3.0);
+    this.spawnOnomatopoeia('「VORPAL STRIKE!」', p.x, p.y - 34, '#F43F5E');
+
+    for (const enemy of this.enemies) {
+      if (dist(p.x, p.y, enemy.x, enemy.y) <= enemy.radius + 135) {
+        enemy.stunnedTimer = Math.max(enemy.stunnedTimer, 4.2);
+        enemy.state = 'patrol';
+        enemy.suspicion = 0;
+        enemy.targetPos = null;
+        enemy.revealedAlpha = 1;
+        this.spawnOnomatopoeia('「CORTE SÔNICO!」', enemy.x, enemy.y - enemy.radius - 16, '#FB7185');
+      }
+    }
+
+    if (
+      this.boss &&
+      !this.boss.defeated &&
+      dist(p.x, p.y, this.boss.x, this.boss.y) <= this.boss.radius + 145
+    ) {
+      const dmg = this.boss.stunnedTimer > 0 ? 115 : 68;
+      this.damageBoss(dmg, 48);
+    }
+  }
+
+  public triggerUseMedkit(): void {
+    if (this.finished) return;
+    const p = this.player;
+    if (p.medkits <= 0 || p.hp >= p.maxHp) return;
+    p.medkits -= 1;
+    p.hp = Math.min(p.maxHp, p.hp + 1);
+    soundEngine.playMedkitHeal();
+    this.spawnOnomatopoeia('「+1 VIDA」', p.x, p.y - 28, '#34D399');
+  }
+
+  private applyPlayerDamage(
+    rawDmg: number,
+    knockbackFrom?: Vec2,
+    playHurtAudio = true,
+    bypassInvuln = false,
+    invulnDuration = 1.65,
+    bypassArmor = false
+  ): void {
+    const p = this.player;
+    if (this.finished) return;
+    if (!bypassInvuln && p.invulnerableTimer > 0) return;
+
+    p.invulnerableTimer = Math.max(p.invulnerableTimer, invulnDuration);
+    this.breakSoundCombo(true);
+    this.adjustHarmony(-8);
+    if (playHurtAudio) {
+      soundEngine.playHurt();
+    }
+
+    if (!bypassArmor && p.armorShield > 0) {
+      p.armorShield = Math.max(0, p.armorShield - 1);
+      this.screenShake = Math.max(this.screenShake, 7);
+      this.spawnOnomatopoeia('「ESCUDO QUEBRADO!」', p.x, p.y - 28, '#38BDF8');
+    } else {
+      p.hp = Math.max(0, p.hp - rawDmg);
+      this.screenShake = Math.max(this.screenShake, bypassArmor ? 5 : 10);
+      this.spawnOnomatopoeia(
+        bypassArmor ? '「TEMPESTADE!」' : '「IMPACTO!」',
+        p.x,
+        p.y - 28,
+        '#F43F5E'
+      );
+    }
+
+    if (knockbackFrom) {
+      const kdx = p.x - knockbackFrom.x;
+      const kdy = p.y - knockbackFrom.y;
+      const kd = Math.hypot(kdx, kdy) || 1;
+      p.x = clamp(p.x + (kdx / kd) * 44, p.radius + 14, this.level.worldWidth - p.radius - 14);
+      p.y = clamp(p.y + (kdy / kd) * 44, p.radius + 14, this.level.worldHeight - p.radius - 14);
+    }
+
+    if (p.hp <= 0) {
+      this.finished = true;
+      this.emitTelemetry();
+      this.callbacks.onGameOver();
+    }
+  }
+
+  private openSupplyCrate(crate: SupplyCrateState): void {
+    const p = this.player;
+    crate.opened = true;
+    this.cratesOpened += 1;
+
+    let detail = '';
+    let accentColor = '#34D399';
+    switch (crate.kind) {
+      case 'medkit':
+        p.medkits += 1;
+        detail = '+1 Kit Médico de Campo [H]';
+        accentColor = '#34D399';
+        break;
+      case 'vest':
+        p.armorShield = Math.min(p.maxArmorShield, p.armorShield + 1);
+        detail = '+1 Escudo Colete Tático';
+        accentColor = '#38BDF8';
+        break;
+      case 'stones':
+        p.stones = Math.min(p.maxStones, p.stones + 3);
+        p.swordEnergy = clamp(p.swordEnergy + 20, 0, 100);
+        detail = '+3 Seixos de Isca · +20 Energia';
+        accentColor = '#FBBF24';
+        break;
+      case 'energy':
+        p.swordEnergy = clamp(p.swordEnergy + 50, 0, 100);
+        detail = '+50 Energia de Sword Skill';
+        accentColor = '#A855F7';
+        break;
+      case 'elixir':
+        p.hp = Math.min(p.maxHp, p.hp + 1);
+        p.armorShield = Math.min(p.maxArmorShield, p.armorShield + 1);
+        p.swordEnergy = clamp(p.swordEnergy + 35, 0, 100);
+        detail = '+1 Vida · +1 Escudo · +35 Energia';
+        accentColor = '#F59E0B';
+        break;
+    }
+
+    this.recentLootToast = {
+      id: this.nextId++,
+      title: crate.label,
+      detail,
+      accentColor,
+    };
+    this.lootToastTimer = 4.0;
+
+    soundEngine.playCrateOpen();
+    this.registerStealthCombo('Caixa Saqueada', 4);
+    this.spawnWave(crate.x, crate.y, 170, 185, accentColor, 'exit', 0, true, 2.0);
+    this.spawnOnomatopoeia('「SUPRIMENTO!」', crate.x, crate.y - 24, accentColor);
+  }
+
+  private damageBoss(hpDmg: number, stanceDmg: number): void {
+    if (!this.boss || this.boss.defeated) return;
+    const boss = this.boss;
+    boss.hp = Math.max(0, boss.hp - hpDmg);
+    boss.stance = Math.max(0, boss.stance - stanceDmg);
+    boss.hurtFlash = 0.28;
+    boss.revealedAlpha = 1;
+    boss.state = 'hunt';
+    boss.targetPos = { x: this.player.x, y: this.player.y };
+    boss.stateTimer = 7.5;
+
+    if (boss.hp <= 0) {
+      boss.defeated = true;
+      boss.telegraphTimer = 0;
+      this.bossDefeated = true;
+      this.screenShake = 14;
+      soundEngine.playBossDefeat();
+      this.registerStealthCombo('Chefe de Andar Derrotado', 14);
+      this.spawnWave(boss.x, boss.y, 520, 260, '#FBBF24', 'boss', 0, true, 4.0);
+      this.spawnOnomatopoeia('「ANDAR LIBERTADO!」', boss.x, boss.y - 42, '#FBBF24');
+      return;
+    }
+
+    if (boss.stance <= 0 && boss.stunnedTimer <= 0) {
+      boss.stunnedTimer = 3.6;
+      boss.telegraphTimer = 0;
+      this.spawnOnomatopoeia('「QUEBRA DE POSTURA!」', boss.x, boss.y - 38, '#38BDF8');
+    } else {
+      this.spawnOnomatopoeia(`-${hpDmg}`, boss.x, boss.y - 30, '#F43F5E');
+    }
   }
 
   private getComboMultiplier(count = this.soundComboCount): number {
@@ -682,13 +1146,43 @@ export class EcophonistEngine {
     source: 'player' | 'stone' | 'birds'
   ): void {
     const hearingMult =
-      (this.settings.difficulty === 'implacavel' ? 1.22 : 1.0) *
-      this.weather.enemyHearingFactor;
+      this.getDifficultyMult().hearing * this.weather.enemyHearingFactor;
     const windCos = Math.cos(this.weather.windDirection);
     const windSin = Math.sin(this.weather.windDirection);
     const windStrength = this.weather.windIntensity;
     let stoneHitAny = false;
+
+    if (this.boss && !this.boss.defeated && this.boss.stunnedTimer <= 0) {
+      const bd = dist(wx, wy, this.boss.x, this.boss.y);
+      const bossRange = Math.max(waveMaxRadius, this.boss.hearingRadius * (loudness / 70)) * hearingMult;
+      if (bd <= bossRange) {
+        if (source === 'stone' || source === 'birds') {
+          this.boss.targetPos = { x: wx, y: wy };
+          this.boss.state = 'investigate';
+          this.boss.stateTimer = 4.8;
+          this.boss.revealedAlpha = 1;
+          stoneHitAny = true;
+        } else if (source === 'player') {
+          const prox = 1 - bd / Math.max(1, bossRange);
+          this.boss.suspicion = clamp(this.boss.suspicion + loudness * (0.4 + prox * 0.8), 0, 100);
+          this.boss.targetPos = { x: wx, y: wy };
+          this.boss.revealedAlpha = 1;
+          if (this.boss.suspicion >= 65) {
+            if (this.boss.state !== 'hunt') {
+              soundEngine.playBossRoar();
+            }
+            this.boss.state = 'hunt';
+            this.boss.stateTimer = 6.5;
+          } else if (this.boss.state === 'patrol') {
+            this.boss.state = 'investigate';
+            this.boss.stateTimer = 4.2;
+          }
+        }
+      }
+    }
+
     for (const enemy of this.enemies) {
+      if (enemy.stunnedTimer > 0) continue;
       const dx = enemy.x - wx;
       const dy = enemy.y - wy;
       const d = Math.hypot(dx, dy);
@@ -821,6 +1315,12 @@ export class EcophonistEngine {
     if (this.stepComboCooldown > 0) {
       this.stepComboCooldown = Math.max(0, this.stepComboCooldown - safeDt);
     }
+    if (this.lootToastTimer > 0) {
+      this.lootToastTimer = Math.max(0, this.lootToastTimer - safeDt);
+      if (this.lootToastTimer <= 0) {
+        this.recentLootToast = null;
+      }
+    }
     if (this.soundComboTimer > 0) {
       this.soundComboTimer = Math.max(0, this.soundComboTimer - safeDt);
       if (this.soundComboTimer <= 0) {
@@ -828,6 +1328,10 @@ export class EcophonistEngine {
         this.soundComboLabel = '';
       }
     }
+
+    // Regenerate Sword Skill energy naturally
+    const energyRate = this.unlockedRecords.has('cacador_de_andar') ? 6.5 : 5.5;
+    this.player.swordEnergy = clamp(this.player.swordEnergy + safeDt * energyRate, 0, 100);
 
     // Periodic stone recharge so players never softlock
     const regenTarget = this.equippedItems.has('ghost_stones') ? 9.4 : 13.5;
@@ -843,6 +1347,7 @@ export class EcophonistEngine {
 
     this.updateWindZones(safeDt);
     this.updateWeather(safeDt);
+    this.updateSafeZone(safeDt);
     this.updateDiaryBeacons(safeDt);
     this.updateWhisperZones(safeDt);
     this.updateSilenceBubble(safeDt);
@@ -850,6 +1355,7 @@ export class EcophonistEngine {
     this.updateStones(safeDt);
     this.updateBirds(safeDt);
     this.updateEnemies(safeDt);
+    this.updateBoss(safeDt);
     this.updateWavesAndParticles(safeDt);
     this.updateAmbientVolume(safeDt);
     this.updateHeartbeat(safeDt);
@@ -911,6 +1417,14 @@ export class EcophonistEngine {
     // Critical vitality adrenaline
     if (this.player.hp === 1) {
       targetBpm += 16;
+    }
+
+    // Safe Zone perimeter proximity & closing stress
+    const zoneMetrics = this.getSafeZoneEdgeMetrics();
+    if (zoneMetrics.edgeProximity > 0.08 || this.safeZone.phase === 'fechando') {
+      targetBpm +=
+        zoneMetrics.edgeProximity * 26 +
+        zoneMetrics.closingSeverity * (this.safeZone.playerOutside ? 22 : 12);
     }
 
     targetBpm = clamp(targetBpm, 66, 184);
@@ -1148,36 +1662,184 @@ export class EcophonistEngine {
     }
   }
 
+  private updateSafeZone(dt: number): void {
+    const stages = this.level.safeZoneStages;
+    if (stages.length === 0) return;
+
+    const diff = this.getDifficultyMult();
+    const activeStage = stages[this.safeZone.stageIndex];
+    if (activeStage && !this.safeZone.lockedFinal) {
+      this.safeZone.phaseTimer -= dt;
+      if (this.safeZone.phase === 'estavel') {
+        if (
+          this.safeZone.phaseTimer <= 5.0 &&
+          this.safeZone.warningPlayedStage !== this.safeZone.stageIndex
+        ) {
+          this.safeZone.warningPlayedStage = this.safeZone.stageIndex;
+          soundEngine.playSafeZoneAlert('countdown');
+          this.spawnOnomatopoeia(
+            '「ZONA EM 5s!」',
+            this.player.x,
+            this.player.y - 36,
+            '#FBBF24'
+          );
+        }
+
+        if (this.safeZone.phaseTimer <= 0) {
+          this.safeZone.phase = 'fechando';
+          this.safeZone.startX = this.safeZone.x;
+          this.safeZone.startY = this.safeZone.y;
+          this.safeZone.startRadius = this.safeZone.radius;
+          this.safeZone.phaseDuration = Math.max(2, activeStage.shrinkDurationSec / diff.zoneSpeed);
+          this.safeZone.phaseTimer = this.safeZone.phaseDuration;
+          soundEngine.playSafeZoneAlert('closing');
+          this.spawnOnomatopoeia(
+            '「ZONA SEGURA FECHANDO!」',
+            this.player.x,
+            this.player.y - 38,
+            '#F43F5E'
+          );
+        }
+      } else {
+        const t = clamp(
+          1 - this.safeZone.phaseTimer / Math.max(0.1, this.safeZone.phaseDuration),
+          0,
+          1
+        );
+        this.safeZone.x =
+          this.safeZone.startX + (this.safeZone.targetX - this.safeZone.startX) * t;
+        this.safeZone.y =
+          this.safeZone.startY + (this.safeZone.targetY - this.safeZone.startY) * t;
+        this.safeZone.radius =
+          this.safeZone.startRadius + (this.safeZone.targetRadius - this.safeZone.startRadius) * t;
+
+        if (this.safeZone.phaseTimer <= 0) {
+          this.safeZone.x = this.safeZone.targetX;
+          this.safeZone.y = this.safeZone.targetY;
+          this.safeZone.radius = this.safeZone.targetRadius;
+          const nextIdx = this.safeZone.stageIndex + 1;
+          if (nextIdx < stages.length) {
+            const nextStage = stages[nextIdx];
+            this.safeZone.stageIndex = nextIdx;
+            this.safeZone.phase = 'estavel';
+            this.safeZone.targetX = nextStage.center.x;
+            this.safeZone.targetY = nextStage.center.y;
+            this.safeZone.targetRadius = nextStage.radius;
+            this.safeZone.phaseDuration = Math.max(2, nextStage.waitDurationSec / diff.zoneSpeed);
+            this.safeZone.phaseTimer = this.safeZone.phaseDuration;
+            this.safeZone.damagePerSec = nextStage.damagePerSec;
+          } else {
+            this.safeZone.phase = 'estavel';
+            this.safeZone.phaseTimer = 0;
+            this.safeZone.lockedFinal = true;
+            this.spawnOnomatopoeia(
+              '「ZONA FINAL ESTABELECIDA」',
+              this.player.x,
+              this.player.y - 36,
+              '#F43F5E'
+            );
+          }
+        }
+      }
+    }
+
+    const dPlayer = dist(this.player.x, this.player.y, this.safeZone.x, this.safeZone.y);
+    this.safeZone.playerOutside = dPlayer > this.safeZone.radius;
+    if (this.safeZone.playerOutside) {
+      this.safeZone.outsideDamageAcc += dt * this.safeZone.damagePerSec * diff.stormDmg;
+      if (this.safeZone.outsideDamageAcc >= 1) {
+        this.safeZone.outsideDamageAcc -= 1;
+        soundEngine.playSafeZoneStaticDamage();
+        this.applyPlayerDamage(1, undefined, false, true, 0.45, true);
+      }
+
+      // Storm electromagnetic crackle emits faint acoustic ripples if unmasked by Silence Bubble
+      this.safeZone.stormStaticTimer -= dt;
+      if (this.safeZone.stormStaticTimer <= 0) {
+        this.safeZone.stormStaticTimer = 2.6;
+        if (!this.silenceBubble) {
+          this.spawnWave(
+            this.player.x,
+            this.player.y,
+            165,
+            210,
+            '#FB7185',
+            'player',
+            36,
+            false,
+            1.6
+          );
+        }
+      }
+    } else {
+      this.safeZone.outsideDamageAcc = Math.max(0, this.safeZone.outsideDamageAcc - dt * 0.35);
+      this.safeZone.stormStaticTimer = Math.min(2.6, this.safeZone.stormStaticTimer + dt);
+
+      // Reward stealthy movement ahead of a contracting Safe Zone
+      const speed = Math.hypot(this.player.vx, this.player.vy);
+      if (
+        this.safeZone.phase === 'fechando' &&
+        speed > 45 &&
+        this.player.currentNoiseDb < 42
+      ) {
+        this.safeZone.stealthRotationTimer += dt;
+        if (this.safeZone.stealthRotationTimer >= 4.2) {
+          this.safeZone.stealthRotationTimer = 0;
+          this.registerStealthCombo('Rotação Furtiva', 3);
+        }
+      } else {
+        this.safeZone.stealthRotationTimer = Math.max(
+          0,
+          this.safeZone.stealthRotationTimer - dt * 0.5
+        );
+      }
+    }
+  }
+
   private updatePlayer(dt: number): void {
     const p = this.player;
     if (p.invulnerableTimer > 0) p.invulnerableTimer = Math.max(0, p.invulnerableTimer - dt);
     if (p.whisperCooldown > 0) p.whisperCooldown = Math.max(0, p.whisperCooldown - dt);
     if (p.silenceCooldown > 0) p.silenceCooldown = Math.max(0, p.silenceCooldown - dt);
+    if (p.sonicLeapCooldown > 0) p.sonicLeapCooldown = Math.max(0, p.sonicLeapCooldown - dt);
+    if (p.vorpalSlashCooldown > 0) p.vorpalSlashCooldown = Math.max(0, p.vorpalSlashCooldown - dt);
     if (p.breathGasping > 0) p.breathGasping = Math.max(0, p.breathGasping - dt);
 
-    // Movement input
-    let ix = this.touchMoveVec.x;
-    let iy = this.touchMoveVec.y;
-    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) iy -= 1;
-    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) iy += 1;
-    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) ix -= 1;
-    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) ix += 1;
+    if (p.dashTimer > 0) {
+      p.dashTimer = Math.max(0, p.dashTimer - dt);
+      p.vx = p.dashVx;
+      p.vy = p.dashVy;
+      p.isSprinting = false;
+      p.isCrouching = false;
+    } else {
+      // Movement input
+      let ix = this.touchMoveVec.x;
+      let iy = this.touchMoveVec.y;
+      if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) iy -= 1;
+      if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) iy += 1;
+      if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) ix -= 1;
+      if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) ix += 1;
 
-    const len = Math.hypot(ix, iy);
-    if (len > 1) {
-      ix /= len;
-      iy /= len;
+      const len = Math.hypot(ix, iy);
+      if (len > 1) {
+        ix /= len;
+        iy /= len;
+      }
+
+      const wantsCrouch =
+        this.keys.has('KeyC') || this.keys.has('ControlLeft') || this.touchCrouch;
+      const wantsSprint =
+        this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.touchSprint;
+      p.isCrouching = wantsCrouch;
+      p.isSprinting = wantsSprint && !wantsCrouch;
+
+      const crouchBonus =
+        p.isCrouching && this.unlockedRecords.has('campeao_da_tundavala') ? 1.08 : 1.0;
+      const baseSpeed = p.isSprinting ? 215 : p.isCrouching ? 88 * crouchBonus : 138;
+      const speed = baseSpeed * this.character.bonuses.speedMult;
+      p.vx = ix * speed;
+      p.vy = iy * speed;
     }
-
-    p.isSprinting = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
-    p.isCrouching = this.keys.has('KeyC') || this.keys.has('ControlLeft');
-
-    const crouchBonus =
-      p.isCrouching && this.unlockedRecords.has('campeao_da_tundavala') ? 1.08 : 1.0;
-    const baseSpeed = p.isSprinting ? 215 : p.isCrouching ? 88 * crouchBonus : 138;
-    const speed = baseSpeed * this.character.bonuses.speedMult;
-    p.vx = ix * speed;
-    p.vy = iy * speed;
 
     // Kimbamba (Palanca Negra) passive acoustic horn echo pulse revealing nearby ruins
     if (this.character.id === 'kimbamba') {
@@ -1440,6 +2102,13 @@ export class EcophonistEngine {
       }
     }
 
+    // Free Fire Tactical Supply Crates pickup
+    for (const crate of this.supplyCrates) {
+      if (!crate.opened && dist(p.x, p.y, crate.x, crate.y) <= p.radius + 22) {
+        this.openSupplyCrate(crate);
+      }
+    }
+
     // Collectible Sound Diaries (play environmental voice narration on pickup)
     for (const d of this.diaries) {
       if (!d.collected && dist(p.x, p.y, d.x, d.y) <= p.radius + 22) {
@@ -1452,8 +2121,19 @@ export class EcophonistEngine {
       }
     }
 
-    // Exit sanctuary reached
+    // Exit sanctuary reached (requires Floor Boss defeated if present!)
     if (dist(p.x, p.y, this.level.exitPos.x, this.level.exitPos.y) <= this.level.exitRadius) {
+      if (this.boss && !this.boss.defeated) {
+        if (Math.floor(this.worldTime * 2) !== Math.floor((this.worldTime - dt) * 2)) {
+          this.spawnOnomatopoeia(
+            '「DERROTE O CHEFE!」',
+            this.level.exitPos.x,
+            this.level.exitPos.y - 42,
+            '#F43F5E'
+          );
+        }
+        return;
+      }
       this.finished = true;
       soundEngine.playVictory();
       const collected = this.crystals.filter((c) => c.collected).length;
@@ -1470,6 +2150,8 @@ export class EcophonistEngine {
         birdsScared: this.birdsScared,
         maskedSteps: this.maskedSteps,
         weatherSeen: Array.from(this.weatherSeen),
+        bossDefeated: this.bossDefeated,
+        cratesOpened: this.cratesOpened,
       });
       this.emitTelemetry();
       this.callbacks.onVictory({
@@ -1503,6 +2185,13 @@ export class EcophonistEngine {
         soundEngine.playStoneImpact();
         this.spawnWave(s.targetX, s.targetY, 370, 290, '#F59E0B', 'stone', 85, false, 3.0);
         this.spawnOnomatopoeia('「CLAC!」', s.targetX, s.targetY - 18, '#FBBF24');
+        if (
+          this.boss &&
+          !this.boss.defeated &&
+          dist(s.targetX, s.targetY, this.boss.x, this.boss.y) <= this.boss.radius + 70
+        ) {
+          this.damageBoss(18, 28);
+        }
         this.stones.splice(i, 1);
       }
     }
@@ -1521,10 +2210,18 @@ export class EcophonistEngine {
 
   private updateEnemies(dt: number): void {
     const p = this.player;
+    const diffMult = this.getDifficultyMult();
 
     for (const enemy of this.enemies) {
       if (enemy.revealedAlpha > 0.14) {
         enemy.revealedAlpha = Math.max(0.14, enemy.revealedAlpha - dt * 0.25);
+      }
+
+      if (enemy.stunnedTimer > 0) {
+        enemy.stunnedTimer = Math.max(0, enemy.stunnedTimer - dt);
+        enemy.vx = 0;
+        enemy.vy = 0;
+        continue;
       }
 
       // Enemy echolocation ping
@@ -1571,7 +2268,7 @@ export class EcophonistEngine {
 
       // Movement target
       let dest: Vec2 = enemy.patrolPoints[enemy.patrolIndex] ?? { x: enemy.x, y: enemy.y };
-      const diffSpeedMult = this.settings.difficulty === 'implacavel' ? 1.15 : 1.0;
+      const diffSpeedMult = diffMult.speed;
       let moveSpeed = enemy.speedPatrol * diffSpeedMult;
 
       if ((enemy.state === 'hunt' || enemy.state === 'investigate') && enemy.targetPos) {
@@ -1611,32 +2308,150 @@ export class EcophonistEngine {
         }
       }
 
-      // Physical contact damage
+      // Physical contact damage (armor absorbs first)
       if (
         p.invulnerableTimer <= 0 &&
         dist(enemy.x, enemy.y, p.x, p.y) <= enemy.radius + p.radius - 2
       ) {
-        p.hp -= 1;
-        p.invulnerableTimer = 1.8;
-        this.screenShake = 10;
-        this.breakSoundCombo(true);
-        soundEngine.playHurt();
-        this.spawnOnomatopoeia('「IMPACTO!」', p.x, p.y - 28, '#F43F5E');
-
-        // Knockback away from predator
-        const kdx = p.x - enemy.x;
-        const kdy = p.y - enemy.y;
-        const kd = Math.hypot(kdx, kdy) || 1;
-        p.x = clamp(p.x + (kdx / kd) * 44, p.radius + 14, this.level.worldWidth - p.radius - 14);
-        p.y = clamp(p.y + (kdy / kd) * 44, p.radius + 14, this.level.worldHeight - p.radius - 14);
-
-        if (p.hp <= 0) {
-          this.finished = true;
-          this.emitTelemetry();
-          this.callbacks.onGameOver();
-          return;
-        }
+        this.applyPlayerDamage(1, enemy, true);
+        if (this.finished) return;
       }
+    }
+  }
+
+  private updateBoss(dt: number): void {
+    const boss = this.boss;
+    if (!boss || boss.defeated) return;
+    const p = this.player;
+    const diff = this.getDifficultyMult();
+
+    if (boss.hurtFlash > 0) boss.hurtFlash = Math.max(0, boss.hurtFlash - dt);
+    if (boss.telegraphCooldown > 0) boss.telegraphCooldown = Math.max(0, boss.telegraphCooldown - dt);
+    if (boss.revealedAlpha > 0.35) {
+      boss.revealedAlpha = Math.max(0.35, boss.revealedAlpha - dt * 0.2);
+    }
+
+    if (boss.stunnedTimer > 0) {
+      boss.stunnedTimer = Math.max(0, boss.stunnedTimer - dt);
+      boss.vx = 0;
+      boss.vy = 0;
+      if (boss.stunnedTimer <= 0) {
+        boss.stance = boss.maxStance;
+      }
+      return;
+    }
+
+    boss.stance = Math.min(boss.maxStance, boss.stance + dt * 3.5);
+
+    const dPlayer = dist(boss.x, boss.y, p.x, p.y);
+    if (dPlayer < 360 && !p.isCamouflaged) {
+      if (boss.state !== 'hunt') {
+        soundEngine.playBossRoar();
+      }
+      boss.state = 'hunt';
+      boss.targetPos = { x: p.x, y: p.y };
+      boss.stateTimer = 5.5;
+    }
+
+    boss.sonarTimer -= dt;
+    if (boss.sonarTimer <= 0) {
+      boss.sonarTimer = boss.state === 'hunt' ? 1.5 : 2.2;
+      this.spawnWave(boss.x, boss.y, 310, 195, boss.accentColor, 'boss', 0, true, 3.0);
+    }
+
+    if (boss.state !== 'patrol') {
+      boss.stateTimer -= dt;
+      if (boss.stateTimer <= 0) {
+        boss.state = 'patrol';
+        boss.targetPos = null;
+        boss.suspicion = 0;
+      }
+    }
+
+    // SAO Boss Ground AoE Slam Telegraph
+    if (
+      boss.state === 'hunt' &&
+      dPlayer <= 240 &&
+      boss.telegraphTimer <= 0 &&
+      boss.telegraphCooldown <= 0
+    ) {
+      boss.telegraphTimer = boss.telegraphMaxTimer;
+      boss.telegraphX = boss.x * 0.45 + p.x * 0.55;
+      boss.telegraphY = boss.y * 0.45 + p.y * 0.55;
+      soundEngine.playBossRoar();
+      this.spawnOnomatopoeia(
+        '「GOLPE DE ANDAR!」',
+        boss.x,
+        boss.y - boss.radius - 18,
+        boss.accentColor
+      );
+    }
+
+    if (boss.telegraphTimer > 0) {
+      boss.telegraphTimer -= dt;
+      if (boss.telegraphTimer <= 0) {
+        this.screenShake = Math.max(this.screenShake, 11);
+        soundEngine.playStoneImpact();
+        this.spawnWave(
+          boss.telegraphX,
+          boss.telegraphY,
+          340,
+          290,
+          boss.accentColor,
+          'boss',
+          90,
+          true,
+          3.6
+        );
+        if (
+          p.invulnerableTimer <= 0 &&
+          dist(p.x, p.y, boss.telegraphX, boss.telegraphY) <= boss.telegraphRadius + p.radius * 0.4
+        ) {
+          this.applyPlayerDamage(1, { x: boss.telegraphX, y: boss.telegraphY }, true);
+          if (this.finished) return;
+        } else if (dist(p.x, p.y, boss.telegraphX, boss.telegraphY) <= boss.telegraphRadius + 135) {
+          this.registerStealthCombo('Esquiva de Chefe', 4);
+        }
+        boss.telegraphCooldown = this.settings.difficulty === 'aincrad' ? 2.8 : 3.8;
+      }
+    }
+
+    let dest: Vec2 = boss.patrolPoints[boss.patrolIndex] ?? { x: boss.x, y: boss.y };
+    let moveSpeed = boss.speedPatrol * diff.speed;
+    if ((boss.state === 'hunt' || boss.state === 'investigate') && boss.targetPos) {
+      dest = boss.targetPos;
+      moveSpeed = (boss.state === 'hunt' ? boss.speedHunt : boss.speedPatrol * 1.25) * diff.speed;
+    }
+    if (boss.telegraphTimer > 0) {
+      moveSpeed *= 0.25;
+    }
+
+    const dx = dest.x - boss.x;
+    const dy = dest.y - boss.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 10) {
+      boss.vx = (dx / d) * moveSpeed;
+      boss.vy = (dy / d) * moveSpeed;
+      boss.angle = Math.atan2(boss.vy, boss.vx);
+      boss.x += boss.vx * dt;
+      boss.y += boss.vy * dt;
+    } else if (boss.state === 'patrol' && boss.patrolPoints.length > 1) {
+      boss.patrolIndex = (boss.patrolIndex + 1) % boss.patrolPoints.length;
+    }
+
+    boss.x = clamp(boss.x, boss.radius + 16, this.level.worldWidth - boss.radius - 16);
+    boss.y = clamp(boss.y, boss.radius + 16, this.level.worldHeight - boss.radius - 16);
+
+    for (const obs of this.obstacles) {
+      const col = circleRectCollide(boss.x, boss.y, boss.radius, obs.x, obs.y, obs.w, obs.h);
+      if (col.hit) {
+        boss.x += col.nx * col.overlap;
+        boss.y += col.ny * col.overlap;
+      }
+    }
+
+    if (p.invulnerableTimer <= 0 && dist(boss.x, boss.y, p.x, p.y) <= boss.radius + p.radius - 2) {
+      this.applyPlayerDamage(1, boss, true);
     }
   }
 
@@ -1699,6 +2514,15 @@ export class EcophonistEngine {
       }
     }
 
+    // Sword Skill slash arc effects
+    for (let i = this.slashEffects.length - 1; i >= 0; i--) {
+      const se = this.slashEffects[i];
+      se.life += dt;
+      if (se.life >= se.maxLife) {
+        this.slashEffects.splice(i, 1);
+      }
+    }
+
     // JoJo Onomatopoeias
     for (let i = this.onomatopoeias.length - 1; i >= 0; i--) {
       const ono = this.onomatopoeias[i];
@@ -1736,12 +2560,38 @@ export class EcophonistEngine {
       if (e.state === 'hunt') highest = 'hunt';
       else if (e.state === 'investigate' && highest !== 'hunt') highest = 'investigate';
     }
+    if (this.boss && !this.boss.defeated) {
+      minEnemyDist = Math.min(minEnemyDist, dist(this.player.x, this.player.y, this.boss.x, this.boss.y));
+      if (this.boss.state === 'hunt') highest = 'hunt';
+      else if (this.boss.state === 'investigate' && highest !== 'hunt') highest = 'investigate';
+    }
 
     const windInfo = formatWindDirection(this.weather.windDirection);
+    const dSafe = dist(this.player.x, this.player.y, this.safeZone.x, this.safeZone.y);
+    const safeDistMeters = Math.max(0, Math.round((dSafe - this.safeZone.radius) / 10));
+    const dTargetSafe = dist(
+      this.player.x,
+      this.player.y,
+      this.safeZone.targetX,
+      this.safeZone.targetY
+    );
+    const playerOutsideTargetZone =
+      this.level.safeZoneStages.length > 0 &&
+      !this.safeZone.lockedFinal &&
+      dTargetSafe > this.safeZone.targetRadius;
+    const safeZoneTargetDistMeters = Math.max(
+      0,
+      Math.round((dTargetSafe - this.safeZone.targetRadius) / 10)
+    );
+
     this.callbacks.onTelemetry({
       hp: this.player.hp,
       maxHp: this.player.maxHp,
+      armorShield: this.player.armorShield,
+      maxArmorShield: this.player.maxArmorShield,
+      medkits: this.player.medkits,
       breath: Math.round(this.player.breath),
+      swordEnergy: Math.round(this.player.swordEnergy),
       isHoldingBreath: this.player.isHoldingBreath,
       breathGasping: this.player.breathGasping > 0,
       isCamouflaged: this.player.isCamouflaged,
@@ -1757,8 +2607,14 @@ export class EcophonistEngine {
       silenceCooldown: Number(this.player.silenceCooldown.toFixed(1)),
       hasSilenceAbility: this.level.hasSilenceAbility,
       silenceActiveRemaining: this.silenceBubble ? Number(this.silenceBubble.remaining.toFixed(1)) : 0,
+      sonicLeapReady: this.player.sonicLeapCooldown <= 0 && this.player.swordEnergy >= 25,
+      sonicLeapCooldown: Number(this.player.sonicLeapCooldown.toFixed(1)),
+      vorpalSlashReady: this.player.vorpalSlashCooldown <= 0 && this.player.swordEnergy >= 40,
+      vorpalSlashCooldown: Number(this.player.vorpalSlashCooldown.toFixed(1)),
       crystalsCollected: this.crystals.filter((c) => c.collected).length,
       crystalsTotal: this.crystals.length,
+      cratesOpened: this.cratesOpened,
+      cratesTotal: this.supplyCrates.length,
       diariesCollectedInLevel: this.diaries.filter((d) => d.collected).length,
       diariesTotalInLevel: this.diaries.length,
       stormActive: this.weather.current === 'tempestade_kwanza',
@@ -1784,6 +2640,51 @@ export class EcophonistEngine {
       soundComboLabel: this.soundComboLabel,
       maxSoundCombo: this.maxSoundCombo,
       camouflageHint: this.activeCamouflageHint,
+      safeZoneActive: this.level.safeZoneStages.length > 0,
+      safeZonePhase: this.safeZone.phase,
+      safeZoneTimeRemaining: Math.max(0, Math.ceil(this.safeZone.phaseTimer)),
+      safeZoneStage: Math.min(this.level.safeZoneStages.length, this.safeZone.stageIndex + 1),
+      safeZoneTotalStages: this.level.safeZoneStages.length,
+      safeZoneLockedFinal: this.safeZone.lockedFinal,
+      playerOutsideSafeZone: this.safeZone.playerOutside,
+      safeZoneDistMeters: safeDistMeters,
+      playerOutsideTargetZone,
+      safeZoneTargetDistMeters,
+      boss: this.boss
+        ? {
+            name: this.boss.name,
+            title: this.boss.title,
+            hp: Math.round(this.boss.hp),
+            maxHp: this.boss.maxHp,
+            bars: this.boss.bars,
+            stance: Math.round(this.boss.stance),
+            maxStance: this.boss.maxStance,
+            stunned: this.boss.stunnedTimer > 0,
+            telegraphing: this.boss.telegraphTimer > 0,
+            defeated: this.boss.defeated,
+            accentColor: this.boss.accentColor,
+          }
+        : null,
+      recentLootToast: this.recentLootToast,
+      radar: {
+        worldWidth: this.level.worldWidth,
+        worldHeight: this.level.worldHeight,
+        playerX: this.player.x,
+        playerY: this.player.y,
+        exitX: this.level.exitPos.x,
+        exitY: this.level.exitPos.y,
+        safeX: this.safeZone.x,
+        safeY: this.safeZone.y,
+        safeRadius: this.safeZone.radius,
+        targetSafeX: this.safeZone.targetX,
+        targetSafeY: this.safeZone.targetY,
+        targetSafeRadius: this.safeZone.targetRadius,
+        crates: this.supplyCrates.map((c) => ({ x: c.x, y: c.y, opened: c.opened })),
+        boss: this.boss
+          ? { x: this.boss.x, y: this.boss.y, defeated: this.boss.defeated }
+          : null,
+        enemies: this.enemies.map((e) => ({ x: e.x, y: e.y, alert: e.state })),
+      },
     });
   }
 
@@ -1795,6 +2696,17 @@ export class EcophonistEngine {
         : enemy.type === 'goliath'
           ? 'Colosso Tambor'
           : 'Rastreador Cego';
+
+    if (this.safeZone.playerOutside) {
+      return {
+        id: 'safe_zone_evade',
+        environmentLabel: 'Fora da Zona Segura',
+        title: 'Rotação Furtiva Urgente',
+        suggestion: `A estática da zona causa dano e emite ecos perto do ${enemyName}. Use [1] Sonic Leap ou agache [C] rumo ao círculo branco!`,
+        actionTag: '[1] / [C] Mover',
+        accentColor: '#FB7185',
+      };
+    }
 
     if (p.isCamouflaged && p.camouflageSource) {
       return {
@@ -1909,6 +2821,123 @@ export class EcophonistEngine {
     };
   }
 
+  private renderBiomeTerrain(ctx: CanvasRenderingContext2D): void {
+    const biome = this.level.biomeVisual;
+    const w = this.level.worldWidth;
+    const h = this.level.worldHeight;
+
+    const palette: Record<
+      typeof biome,
+      { bg: string; grid: string; accent: string; stripe: string }
+    > = {
+      maiombe: {
+        bg: '#060C0A',
+        grid: 'rgba(52, 211, 153, 0.055)',
+        accent: 'rgba(16, 185, 129, 0.08)',
+        stripe: 'rgba(34, 211, 238, 0.06)',
+      },
+      miradouro: {
+        bg: '#0C0908',
+        grid: 'rgba(251, 191, 36, 0.055)',
+        accent: 'rgba(245, 158, 11, 0.075)',
+        stripe: 'rgba(244, 114, 182, 0.055)',
+      },
+      tundavala: {
+        bg: '#060912',
+        grid: 'rgba(56, 189, 248, 0.06)',
+        accent: 'rgba(167, 139, 250, 0.075)',
+        stripe: 'rgba(244, 63, 94, 0.06)',
+      },
+      bermuda: {
+        bg: '#080B11',
+        grid: 'rgba(251, 191, 36, 0.06)',
+        accent: 'rgba(148, 163, 184, 0.09)',
+        stripe: 'rgba(245, 158, 11, 0.14)',
+      },
+      purgatorio: {
+        bg: '#070812',
+        grid: 'rgba(168, 85, 247, 0.065)',
+        accent: 'rgba(129, 140, 248, 0.08)',
+        stripe: 'rgba(56, 189, 248, 0.07)',
+      },
+      aincrad: {
+        bg: '#0B060D',
+        grid: 'rgba(244, 63, 94, 0.07)',
+        accent: 'rgba(251, 191, 36, 0.09)',
+        stripe: 'rgba(34, 211, 238, 0.08)',
+      },
+    };
+    const pal = palette[biome] ?? palette.maiombe;
+
+    ctx.fillStyle = pal.bg;
+    ctx.fillRect(0, 0, w, h);
+
+    // Topographic / Tactical road contours along the 2800px elongated map
+    ctx.save();
+    if (biome === 'bermuda') {
+      // Tactical highway road lane across Viaduto do Cuanza
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+      ctx.fillRect(0, h * 0.42, w, h * 0.16);
+      ctx.strokeStyle = pal.stripe;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([28, 22]);
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.5);
+      ctx.lineTo(w, h * 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (biome === 'aincrad') {
+      // Floating Aincrad citadel diamond tiles
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 1.4;
+      for (let tx = 140; tx < w; tx += 320) {
+        ctx.strokeRect(tx - 90, h * 0.5 - 90, 180, 180);
+      }
+    } else {
+      // Organic geological contour bands
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 1.5;
+      for (let band = 1; band <= 4; band++) {
+        ctx.beginPath();
+        const baseY = (h / 5) * band;
+        for (let x = 0; x <= w; x += 80) {
+          const yy = baseY + Math.sin(x * 0.004 + band * 1.4) * 34;
+          if (x === 0) ctx.moveTo(x, yy);
+          else ctx.lineTo(x, yy);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // SAO Tactical Sector Grid & Distance Markers
+    ctx.strokeStyle = pal.grid;
+    ctx.lineWidth = 1;
+    const gridSize = 100;
+    for (let gx = 0; gx <= w; gx += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, h);
+      ctx.stroke();
+      if (gx > 0 && gx % 400 === 0 && gx < w) {
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.14)';
+        ctx.font = '700 11px "JetBrains Mono", monospace';
+        ctx.fillText(`SETOR ${gx}m`, gx + 8, 28);
+      }
+    }
+    for (let gy = 0; gy <= h; gy += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, gy);
+      ctx.lineTo(w, gy);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // World boundary ink frame
+    ctx.strokeStyle = biome === 'aincrad' ? 'rgba(244, 63, 94, 0.42)' : 'rgba(56, 189, 248, 0.32)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+  }
+
   public render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save();
 
@@ -1927,27 +2956,8 @@ export class EcophonistEngine {
     const shakeY = this.screenShake > 0 ? (Math.random() - 0.5) * this.screenShake : 0;
     ctx.translate(-this.camera.x + shakeX, -this.camera.y + shakeY);
 
-    // Subtle acoustic radar grid lines (SAO tactical backdrop)
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.045)';
-    ctx.lineWidth = 1;
-    const gridSize = 80;
-    for (let gx = 0; gx <= this.level.worldWidth; gx += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(gx, 0);
-      ctx.lineTo(gx, this.level.worldHeight);
-      ctx.stroke();
-    }
-    for (let gy = 0; gy <= this.level.worldHeight; gy += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(0, gy);
-      ctx.lineTo(this.level.worldWidth, gy);
-      ctx.stroke();
-    }
-
-    // World boundary ink frame
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(8, 8, this.level.worldWidth - 16, this.level.worldHeight - 16);
+    // Rich Biome Terrain & Tactical Sector Grid
+    this.renderBiomeTerrain(ctx);
 
     // Render Wind Camouflage Zones
     for (const wz of this.windZones) {
@@ -1996,36 +3006,85 @@ export class EcophonistEngine {
       ctx.restore();
     }
 
-    // Render Exit Sanctuary Portal
+    // Render Exit Sanctuary Portal (Locked crimson barrier while boss is alive!)
     const ex = this.level.exitPos.x;
     const ey = this.level.exitPos.y;
+    const exitLocked = Boolean(this.boss && !this.boss.defeated);
     const pulse = Math.sin(this.worldTime * 3.5) * 6;
     ctx.save();
-    const grad = ctx.createRadialGradient(ex, ey, 6, ex, ey, this.level.exitRadius + 16);
-    grad.addColorStop(0, 'rgba(34, 211, 238, 0.72)');
-    grad.addColorStop(0.65, 'rgba(16, 185, 129, 0.25)');
+    const grad = ctx.createRadialGradient(ex, ey, 6, ex, ey, this.level.exitRadius + 18);
+    grad.addColorStop(0, exitLocked ? 'rgba(244, 63, 94, 0.55)' : 'rgba(34, 211, 238, 0.72)');
+    grad.addColorStop(0.65, exitLocked ? 'rgba(244, 63, 94, 0.16)' : 'rgba(16, 185, 129, 0.25)');
     grad.addColorStop(1, 'rgba(16, 185, 129, 0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(ex, ey, this.level.exitRadius + 16, 0, Math.PI * 2);
+    ctx.arc(ex, ey, this.level.exitRadius + 18, 0, Math.PI * 2);
     ctx.fill();
 
     // SAO + Chokwe Sona geometric sanctuary gate
-    ctx.strokeStyle = '#67E8F9';
+    ctx.strokeStyle = exitLocked ? '#F43F5E' : '#67E8F9';
     ctx.lineWidth = 2.5;
     ctx.translate(ex, ey);
-    ctx.rotate(this.worldTime * 0.7);
+    ctx.rotate(this.worldTime * (exitLocked ? -0.35 : 0.7));
     const rGate = 22 + pulse * 0.3;
     ctx.strokeRect(-rGate, -rGate, rGate * 2, rGate * 2);
     ctx.rotate(Math.PI / 4);
-    ctx.strokeStyle = '#FBBF24';
+    ctx.strokeStyle = exitLocked ? '#FB7185' : '#FBBF24';
     ctx.strokeRect(-rGate * 0.72, -rGate * 0.72, rGate * 1.44, rGate * 1.44);
-    ctx.strokeStyle = '#EF4444';
+    ctx.strokeStyle = exitLocked ? '#9F1239' : '#10B981';
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.arc(0, 0, rGate * 0.42, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
+
+    // Render Free Fire Tactical Supply Crates
+    for (const crate of this.supplyCrates) {
+      if (crate.opened) continue;
+      const hover = Math.sin(this.worldTime * 3.2 + crate.pulsePhase) * 2.5;
+      const cColor =
+        crate.rarity === 'lendario'
+          ? '#F59E0B'
+          : crate.rarity === 'tatico'
+            ? '#38BDF8'
+            : '#34D399';
+      ctx.save();
+      ctx.translate(crate.x, crate.y + hover);
+
+      // Subtle tactical loot aura
+      const aura = ctx.createRadialGradient(0, 0, 4, 0, 0, 28);
+      aura.addColorStop(0, `${cColor}44`);
+      aura.addColorStop(1, `${cColor}00`);
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(0, 0, 28, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crate drop shadow
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(-13, -9 + 5, 28, 22);
+
+      // Metallic crate body + bevel highlight
+      ctx.fillStyle = '#0F172A';
+      ctx.strokeStyle = cColor;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.roundRect(-14, -11, 28, 22, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      // Cross strap / airdrop band
+      ctx.strokeStyle = cColor;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-14, 0);
+      ctx.lineTo(14, 0);
+      ctx.moveTo(0, -11);
+      ctx.lineTo(0, 11);
+      ctx.stroke();
+
+      ctx.restore();
+    }
 
     // Render Resonance Crystals (Tuning forks)
     for (const c of this.crystals) {
@@ -2105,20 +3164,35 @@ export class EcophonistEngine {
       ctx.restore();
     }
 
-    // Render Obstacles illuminated by Acoustic Sight (with manga hatching feel)
+    // Render Obstacles illuminated by Acoustic Sight (with 3D bevels, cast shadows & hatching)
     for (const obs of this.obstacles) {
       const playerClose =
-        dist(this.player.x, this.player.y, obs.x + obs.w / 2, obs.y + obs.h / 2) < 130
-          ? 0.45
+        dist(this.player.x, this.player.y, obs.x + obs.w / 2, obs.y + obs.h / 2) < 140
+          ? 0.48
           : 0;
       const vis = Math.max(obs.discoveredAlpha, playerClose);
       ctx.save();
-      ctx.fillStyle = `rgba(15, 23, 42, ${0.4 + vis * 0.55})`;
+
+      // Cast drop shadow for realistic depth
+      ctx.fillStyle = `rgba(2, 4, 10, ${0.42 + vis * 0.35})`;
+      ctx.fillRect(obs.x + 8, obs.y + 10, obs.w, obs.h);
+
+      // Base structural fill by obstacle kind
+      ctx.fillStyle =
+        obs.kind === 'pillar'
+          ? `rgba(24, 34, 56, ${0.48 + vis * 0.5})`
+          : obs.kind === 'ruin'
+            ? `rgba(20, 28, 44, ${0.46 + vis * 0.5})`
+            : `rgba(15, 23, 42, ${0.44 + vis * 0.52})`;
       ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+
+      // Top bevel edge highlight
+      ctx.fillStyle = `rgba(148, 163, 184, ${0.06 + vis * 0.14})`;
+      ctx.fillRect(obs.x + 2, obs.y + 2, obs.w - 4, 5);
 
       // Manga ink diagonal hatching inside revealed ruins
       if (vis > 0.25) {
-        ctx.strokeStyle = `rgba(56, 189, 248, ${vis * 0.22})`;
+        ctx.strokeStyle = `rgba(56, 189, 248, ${vis * 0.2})`;
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let hx = obs.x; hx < obs.x + obs.w + obs.h; hx += 18) {
@@ -2128,7 +3202,7 @@ export class EcophonistEngine {
         ctx.stroke();
       }
 
-      ctx.strokeStyle = `rgba(56, 189, 248, ${0.15 + vis * 0.72})`;
+      ctx.strokeStyle = `rgba(56, 189, 248, ${0.18 + vis * 0.72})`;
       ctx.lineWidth = 2.4;
       ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
       ctx.restore();
@@ -2289,7 +3363,17 @@ export class EcophonistEngine {
       ctx.restore();
 
       // Alert state text icon above enemy (non-hue-only affordance)
-      if (enemy.state !== 'patrol') {
+      if (enemy.stunnedTimer > 0) {
+        ctx.save();
+        ctx.font = '800 13px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#38BDF8';
+        ctx.strokeStyle = '#020408';
+        ctx.lineWidth = 3;
+        ctx.strokeText('ATORDOADO', enemy.x, enemy.y - enemy.radius - 12);
+        ctx.fillText('ATORDOADO', enemy.x, enemy.y - enemy.radius - 12);
+        ctx.restore();
+      } else if (enemy.state !== 'patrol') {
         ctx.save();
         ctx.font = '800 16px "Barlow Condensed", sans-serif';
         ctx.textAlign = 'center';
@@ -2301,6 +3385,191 @@ export class EcophonistEngine {
         ctx.fillText(label, enemy.x, enemy.y - enemy.radius - 12);
         ctx.restore();
       }
+    }
+
+    // Render SAO Floor Boss & Ground AoE Slam Telegraph
+    if (this.boss && !this.boss.defeated) {
+      const b = this.boss;
+      if (b.telegraphTimer > 0) {
+        const progress = 1 - b.telegraphTimer / Math.max(0.1, b.telegraphMaxTimer);
+        ctx.save();
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.16)';
+        ctx.beginPath();
+        ctx.arc(b.telegraphX, b.telegraphY, b.telegraphRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Expanding inner danger ring showing impact timing
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.28)';
+        ctx.beginPath();
+        ctx.arc(b.telegraphX, b.telegraphY, b.telegraphRadius * progress, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#F43F5E';
+        ctx.lineWidth = 2.6;
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.arc(b.telegraphX, b.telegraphY, b.telegraphRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.translate(b.x, b.y);
+
+      // Boss outer SAO targeting hexagon/halo
+      ctx.strokeStyle = b.stunnedTimer > 0 ? '#38BDF8' : b.accentColor;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + this.worldTime * 0.8;
+        const rx = Math.cos(a) * (b.radius + 12);
+        const ry = Math.sin(a) * (b.radius + 12);
+        if (i === 0) ctx.moveTo(rx, ry);
+        else ctx.lineTo(rx, ry);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.rotate(b.angle);
+      ctx.fillStyle = b.hurtFlash > 0 ? '#F8FAFC' : b.stunnedTimer > 0 ? '#1E293B' : '#180B18';
+      ctx.strokeStyle = b.accentColor;
+      ctx.lineWidth = 3.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Armored blades / acoustic horns
+      ctx.fillStyle = b.accentColor;
+      ctx.beginPath();
+      ctx.moveTo(b.radius + 10, 0);
+      ctx.lineTo(-b.radius * 0.4, -b.radius * 0.95);
+      ctx.lineTo(-b.radius * 0.15, 0);
+      ctx.lineTo(-b.radius * 0.4, b.radius * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      if (b.stunnedTimer > 0) {
+        ctx.save();
+        ctx.font = '800 13px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#38BDF8';
+        ctx.strokeStyle = '#020408';
+        ctx.lineWidth = 3;
+        ctx.strokeText('POSTURA QUEBRADA!', b.x, b.y - b.radius - 16);
+        ctx.fillText('POSTURA QUEBRADA!', b.x, b.y - b.radius - 16);
+        ctx.restore();
+      }
+    }
+
+    // Render Free Fire Safe Zone Storm Perimeter, Target Next Circle & Tactical Guide Vector
+    if (this.level.safeZoneStages.length > 0) {
+      ctx.save();
+      // Subtle crimson haze outside current Safe Zone using even-odd fill
+      ctx.fillStyle = this.safeZone.playerOutside
+        ? 'rgba(225, 29, 72, 0.28)'
+        : 'rgba(225, 29, 72, 0.2)';
+      ctx.beginPath();
+      ctx.rect(-800, -800, this.level.worldWidth + 1600, this.level.worldHeight + 1600);
+      ctx.arc(this.safeZone.x, this.safeZone.y, Math.max(10, this.safeZone.radius), 0, Math.PI * 2, true);
+      ctx.fill('evenodd');
+
+      // Active storm boundary ring + sweeping kinetic storm pulse when closing
+      ctx.strokeStyle =
+        this.safeZone.phase === 'fechando'
+          ? 'rgba(251, 113, 133, 0.95)'
+          : 'rgba(244, 63, 94, 0.78)';
+      ctx.lineWidth = this.safeZone.phase === 'fechando' ? 4.2 : 3.0;
+      ctx.beginPath();
+      ctx.arc(this.safeZone.x, this.safeZone.y, Math.max(10, this.safeZone.radius), 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (this.safeZone.phase === 'fechando') {
+        ctx.strokeStyle = 'rgba(253, 164, 175, 0.55)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([22, 18]);
+        ctx.lineDashOffset = -this.worldTime * 48;
+        ctx.beginPath();
+        ctx.arc(
+          this.safeZone.x,
+          this.safeZone.y,
+          Math.max(10, this.safeZone.radius - 7),
+          0,
+          Math.PI * 2
+        );
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+      }
+
+      // Next Safe Zone target ring (white dashed tactical circle)
+      if (!this.safeZone.lockedFinal && this.safeZone.targetRadius < this.safeZone.radius - 10) {
+        ctx.strokeStyle = 'rgba(248, 250, 252, 0.6)';
+        ctx.lineWidth = 2.0;
+        ctx.setLineDash([14, 10]);
+        ctx.beginPath();
+        ctx.arc(this.safeZone.targetX, this.safeZone.targetY, this.safeZone.targetRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Free Fire Tactical Dotted Path Line when player needs to rotate into the Safe Zone
+      const distToTarget = dist(
+        this.player.x,
+        this.player.y,
+        this.safeZone.targetX,
+        this.safeZone.targetY
+      );
+      const needsRotation =
+        this.safeZone.playerOutside ||
+        (!this.safeZone.lockedFinal && distToTarget > this.safeZone.targetRadius);
+      if (needsRotation) {
+        const destX = this.safeZone.playerOutside ? this.safeZone.x : this.safeZone.targetX;
+        const destY = this.safeZone.playerOutside ? this.safeZone.y : this.safeZone.targetY;
+        const destR = this.safeZone.playerOutside ? this.safeZone.radius : this.safeZone.targetRadius;
+        const vx = destX - this.player.x;
+        const vy = destY - this.player.y;
+        const dCenter = Math.hypot(vx, vy) || 1;
+        const ux = vx / dCenter;
+        const uy = vy / dCenter;
+        const edgeDist = Math.max(0, dCenter - destR + 24);
+        const guideEndDist = Math.min(edgeDist, 380);
+        const gx = this.player.x + ux * guideEndDist;
+        const gy = this.player.y + uy * guideEndDist;
+
+        ctx.strokeStyle = this.safeZone.playerOutside
+          ? 'rgba(251, 113, 133, 0.72)'
+          : 'rgba(248, 250, 252, 0.45)';
+        ctx.lineWidth = 2.0;
+        ctx.setLineDash([8, 9]);
+        ctx.lineDashOffset = -this.worldTime * 34;
+        ctx.beginPath();
+        ctx.moveTo(this.player.x + ux * 28, this.player.y + uy * 28);
+        ctx.lineTo(gx, gy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+
+        // Directional chevron near player pointing to safety
+        const chevDist = 42;
+        const cx = this.player.x + ux * chevDist;
+        const cy = this.player.y + uy * chevDist;
+        const angleToSafe = Math.atan2(uy, ux);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angleToSafe);
+        ctx.fillStyle = this.safeZone.playerOutside ? '#FB7185' : '#E2E8F0';
+        ctx.beginPath();
+        ctx.moveTo(8, 0);
+        ctx.lineTo(-4, -5);
+        ctx.lineTo(-2, 0);
+        ctx.lineTo(-4, 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
     }
 
     // Render Silence Bubble
@@ -2395,6 +3664,27 @@ export class EcophonistEngine {
       this.equippedItems.has('golden_tuning')
     );
     ctx.restore();
+
+    // Render SAO Sword Skill Slash Arcs
+    for (const se of this.slashEffects) {
+      const t = clamp(se.life / se.maxLife, 0, 1);
+      ctx.save();
+      ctx.translate(se.x, se.y);
+      ctx.rotate(se.angle);
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = se.color;
+      ctx.lineWidth = se.kind === 'vorpal_slash' ? 9 * (1 - t * 0.5) : 6 * (1 - t * 0.4);
+      ctx.beginPath();
+      ctx.arc(0, 0, se.radius * (0.72 + t * 0.35), -1.15, 1.15);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#F8FAFC';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, se.radius * (0.68 + t * 0.35), -0.9, 0.9);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Render JoJo-style Onomatopoeia SFX
     for (const ono of this.onomatopoeias) {
@@ -2518,6 +3808,104 @@ export class EcophonistEngine {
     vig.addColorStop(1, 'rgba(4, 6, 11, 0.72)');
     ctx.fillStyle = vig;
     ctx.fillRect(0, 0, width, height);
+
+    // Screen-border Acoustic Heartbeat Indicator reacting to Safe Zone perimeter proximity & closing phase
+    this.renderSafeZoneHeartbeatBorder(ctx, width, height);
+  }
+
+  private renderSafeZoneHeartbeatBorder(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ): void {
+    const { edgeProximity, closingSeverity } = this.getSafeZoneEdgeMetrics();
+    const isClosing = this.safeZone.phase === 'fechando';
+    const baseVisibility = Math.max(
+      edgeProximity,
+      isClosing ? 0.26 + closingSeverity * 0.22 : 0
+    );
+    if (baseVisibility <= 0.04) return;
+
+    const hb = this.getHeartbeatState();
+    const pulseWave = this.settings.reducedEffects ? 0.65 : 0.34 + 0.66 * hb.pulse;
+
+    // Color shift: Cyan Blue (#22D3EE -> 34, 211, 238) -> Aggressive Red (#F42644 -> 244, 38, 68)
+    const colorT = clamp(closingSeverity, 0, 1);
+    const r = Math.round(34 + (244 - 34) * colorT);
+    const g = Math.round(211 + (38 - 211) * colorT);
+    const b = Math.round(238 + (68 - 238) * colorT);
+
+    const strength = clamp(baseVisibility, 0, 1);
+    const borderDepth = 34 + strength * 58 + hb.pulse * (this.settings.reducedEffects ? 4 : 16);
+    const edgeAlpha = clamp((0.12 + strength * 0.42) * pulseWave, 0, 0.65);
+
+    ctx.save();
+
+    // Top pulsing border gradient
+    const topGrad = ctx.createLinearGradient(0, 0, 0, borderDepth);
+    topGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`);
+    topGrad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(0, 0, width, borderDepth);
+
+    // Bottom pulsing border gradient
+    const botGrad = ctx.createLinearGradient(0, height, 0, height - borderDepth);
+    botGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`);
+    botGrad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = botGrad;
+    ctx.fillRect(0, height - borderDepth, width, borderDepth);
+
+    // Left pulsing border gradient
+    const leftGrad = ctx.createLinearGradient(0, 0, borderDepth, 0);
+    leftGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`);
+    leftGrad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = leftGrad;
+    ctx.fillRect(0, 0, borderDepth, height);
+
+    // Right pulsing border gradient
+    const rightGrad = ctx.createLinearGradient(width, 0, width - borderDepth, 0);
+    rightGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`);
+    rightGrad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = rightGrad;
+    ctx.fillRect(width - borderDepth, 0, borderDepth, height);
+
+    // Crisp inner perimeter rim pulse
+    const rimAlpha = clamp((0.25 + strength * 0.65) * pulseWave, 0, 0.9);
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${rimAlpha})`;
+    ctx.lineWidth = 2 + strength * 2.4;
+    ctx.strokeRect(1.5, 1.5, width - 3, height - 3);
+
+    // Acoustic Heartbeat ECG Waveform lines along top & bottom edges
+    if (!this.settings.reducedEffects && strength >= 0.14) {
+      const waveAlpha = clamp((0.28 + strength * 0.62) * (0.45 + 0.55 * hb.pulse), 0, 0.92);
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${waveAlpha})`;
+      ctx.lineWidth = 1.6 + strength * 0.9;
+
+      const drawEdgeWave = (baseY: number, dir: 1 | -1) => {
+        ctx.beginPath();
+        const step = 10;
+        const maxAmp = (8 + strength * 16) * (0.35 + 0.65 * hb.pulse);
+        for (let x = 0; x <= width; x += step) {
+          const norm = x / Math.max(1, width);
+          const centerEnv = Math.sin(norm * Math.PI);
+          // Sharp lub-dub acoustic spike traveling along the screen border
+          const spikePos = (norm * 2.2 - this.heartBeatPhase * 1.4 + 3) % 1;
+          const lubSpike = Math.exp(-Math.pow((spikePos - 0.35) / 0.055, 2));
+          const dubSpike = -0.6 * Math.exp(-Math.pow((spikePos - 0.52) / 0.045, 2));
+          const ripple = Math.sin(norm * 26 - this.worldTime * 7) * 0.22;
+          const offset = (lubSpike + dubSpike + ripple) * maxAmp * centerEnv * dir;
+          const py = baseY + offset;
+          if (x === 0) ctx.moveTo(x, py);
+          else ctx.lineTo(x, py);
+        }
+        ctx.stroke();
+      };
+
+      drawEdgeWave(5, 1);
+      drawEdgeWave(height - 5, -1);
+    }
+
+    ctx.restore();
   }
 
   private drawCharacterSprite(

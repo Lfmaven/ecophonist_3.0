@@ -21,6 +21,14 @@ import {
   X,
   Camera,
   Ear,
+  Shield,
+  Sword,
+  Zap,
+  Package,
+  AlertTriangle,
+  Cross,
+  Skull,
+  Gamepad2,
 } from 'lucide-react';
 import { getCharacterById } from '../game/characters';
 import { EcophonistEngine } from '../game/engine';
@@ -71,12 +79,17 @@ interface GameCanvasViewProps {
     earnedRecords: SoundRecordId[];
   }) => void;
   onGoNextLevel: () => void;
+  isExternalModalOpen?: boolean;
 }
 
 const INITIAL_HUD: HUDTelemetry = {
   hp: 3,
   maxHp: 3,
+  armorShield: 0,
+  maxArmorShield: 3,
+  medkits: 1,
   breath: 100,
+  swordEnergy: 65,
   isHoldingBreath: false,
   breathGasping: false,
   isCamouflaged: false,
@@ -92,8 +105,14 @@ const INITIAL_HUD: HUDTelemetry = {
   silenceCooldown: 0,
   hasSilenceAbility: false,
   silenceActiveRemaining: 0,
+  sonicLeapReady: true,
+  sonicLeapCooldown: 0,
+  vorpalSlashReady: true,
+  vorpalSlashCooldown: 0,
   crystalsCollected: 0,
   crystalsTotal: 3,
+  cratesOpened: 0,
+  cratesTotal: 4,
   diariesCollectedInLevel: 0,
   diariesTotalInLevel: 2,
   stormActive: false,
@@ -119,6 +138,35 @@ const INITIAL_HUD: HUDTelemetry = {
   soundComboLabel: '',
   maxSoundCombo: 0,
   camouflageHint: null,
+  safeZoneActive: true,
+  safeZonePhase: 'estavel',
+  safeZoneTimeRemaining: 24,
+  safeZoneStage: 1,
+  safeZoneTotalStages: 3,
+  safeZoneLockedFinal: false,
+  playerOutsideSafeZone: false,
+  safeZoneDistMeters: 0,
+  playerOutsideTargetZone: false,
+  safeZoneTargetDistMeters: 0,
+  boss: null,
+  recentLootToast: null,
+  radar: {
+    worldWidth: 2800,
+    worldHeight: 1100,
+    playerX: 115,
+    playerY: 550,
+    exitX: 2660,
+    exitY: 550,
+    safeX: 1400,
+    safeY: 550,
+    safeRadius: 1620,
+    targetSafeX: 1950,
+    targetSafeY: 550,
+    targetSafeRadius: 1180,
+    crates: [],
+    boss: null,
+    enemies: [],
+  },
 };
 
 /**
@@ -418,6 +466,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
   onCollectDiary,
   onCompleteLevel,
   onGoNextLevel,
+  isExternalModalOpen = false,
 }) => {
   const activeCharacter = getCharacterById(characterId);
   const [avatarError, setAvatarError] = useState(false);
@@ -475,10 +524,34 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
   } | null>(null);
   const [runSeed, setRunSeed] = useState(0);
 
+  // Mobile & Tablet touch support (auto-enabled on phones, tablets, and touchscreens; toggleable in HUD)
+  const touchOverrideRef = useRef(false);
+  const [showTouchControls, setShowTouchControls] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(pointer: coarse)').matches ||
+      navigator.maxTouchPoints > 0 ||
+      window.innerWidth < 1024
+    );
+  });
+  const [touchCrouch, setTouchCrouch] = useState(false);
+  const [touchSprint, setTouchSprint] = useState(false);
+  const [joystickKnob, setJoystickKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const joystickBaseRef = useRef<HTMLDivElement | null>(null);
+  const joystickPointerIdRef = useRef<number | null>(null);
+
   const gameStateRef = useRef<GameState>('PLAYING');
   const captureOpenRef = useRef(false);
+  const externalModalOpenRef = useRef(isExternalModalOpen);
   useEffect(() => {
     gameStateRef.current = gameState;
+    if (gameState !== 'PLAYING') {
+      joystickPointerIdRef.current = null;
+      setJoystickKnob({ x: 0, y: 0 });
+      setTouchSprint(false);
+      engineRef.current?.setTouchMove(0, 0);
+      engineRef.current?.setTouchSprint(false);
+    }
   }, [gameState]);
   useEffect(() => {
     hudRef.current = hud;
@@ -487,18 +560,100 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
     captureOpenRef.current = captureSnapshot !== null;
   }, [captureSnapshot]);
   useEffect(() => {
+    externalModalOpenRef.current = isExternalModalOpen;
+    if (isExternalModalOpen) {
+      joystickPointerIdRef.current = null;
+      setJoystickKnob({ x: 0, y: 0 });
+      setTouchSprint(false);
+      engineRef.current?.clearKeys();
+    }
+  }, [isExternalModalOpen]);
+  useEffect(() => {
     if (!hud.camouflageHint) {
       setHintDismissed(false);
     }
   }, [hud.camouflageHint]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const coarseMq = window.matchMedia('(pointer: coarse)');
+    const syncTouchMode = () => {
+      if (touchOverrideRef.current) return;
+      setShowTouchControls(
+        coarseMq.matches || navigator.maxTouchPoints > 0 || window.innerWidth < 1024
+      );
+    };
+    coarseMq.addEventListener('change', syncTouchMode);
+    window.addEventListener('resize', syncTouchMode);
+    return () => {
+      coarseMq.removeEventListener('change', syncTouchMode);
+      window.removeEventListener('resize', syncTouchMode);
+    };
+  }, []);
+
+  const updateJoystickFromClient = useCallback((clientX: number, clientY: number) => {
+    const base = joystickBaseRef.current;
+    if (!base) return;
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const maxR = Math.max(24, rect.width * 0.38);
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR) {
+      dx = (dx / dist) * maxR;
+      dy = (dy / dist) * maxR;
+    }
+    setJoystickKnob({ x: dx, y: dy });
+    const normX = dx / maxR;
+    const normY = dy / maxR;
+    const mag = Math.hypot(normX, normY);
+    if (mag < 0.12) {
+      engineRef.current?.setTouchMove(0, 0);
+    } else {
+      engineRef.current?.setTouchMove(normX, normY);
+    }
+  }, []);
+
+  const resetJoystick = useCallback(() => {
+    joystickPointerIdRef.current = null;
+    setJoystickKnob({ x: 0, y: 0 });
+    engineRef.current?.setTouchMove(0, 0);
+  }, []);
+
+  const toggleTouchCrouch = useCallback(() => {
+    soundEngine.unlock();
+    setTouchCrouch((prev) => {
+      const next = !prev;
+      if (next) setTouchSprint(false);
+      engineRef.current?.setTouchCrouch(next);
+      return next;
+    });
+  }, []);
+
+  const toggleTouchSprint = useCallback(() => {
+    soundEngine.unlock();
+    setTouchSprint((prev) => {
+      const next = !prev;
+      if (next) setTouchCrouch(false);
+      engineRef.current?.setTouchSprint(next);
+      return next;
+    });
+  }, []);
+
   const captureScreenshot = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    let sourceDataUrl = '';
+    try {
+      sourceDataUrl = canvas.toDataURL('image/png');
+    } catch {
+      return;
+    }
     soundEngine.unlock();
     soundEngine.playCameraShutter();
     const h = hudRef.current;
-    const sourceDataUrl = canvas.toDataURL('image/png');
     if (gameStateRef.current === 'PLAYING') {
       setGameState('PAUSED');
     }
@@ -528,6 +683,10 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
     setActiveDiary(null);
     sonarRipplesRef.current = [];
     sonarSpawnTimerRef.current = 0;
+    joystickPointerIdRef.current = null;
+    setJoystickKnob({ x: 0, y: 0 });
+    setTouchCrouch(false);
+    setTouchSprint(false);
     setRunResult(null);
     setHud(INITIAL_HUD);
     setGameState('PLAYING');
@@ -649,7 +808,14 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
   // Keyboard bindings
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (captureOpenRef.current) return;
+      if (captureOpenRef.current || externalModalOpenRef.current) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')
+      ) {
+        return;
+      }
       soundEngine.unlock();
       if (e.code === 'KeyF') {
         e.preventDefault();
@@ -675,6 +841,12 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
         engineRef.current.triggerLeafWhisper();
       } else if (e.code === 'KeyR') {
         engineRef.current.triggerSilenceChant();
+      } else if (e.code === 'Digit1' || e.code === 'Numpad1') {
+        engineRef.current.triggerSonicLeap();
+      } else if (e.code === 'Digit2' || e.code === 'Numpad2') {
+        engineRef.current.triggerVorpalSlash();
+      } else if (e.code === 'KeyH') {
+        engineRef.current.triggerUseMedkit();
       } else {
         engineRef.current.setKey(e.code, true);
       }
@@ -738,72 +910,102 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
         : 'text-emerald-300';
 
   return (
-    <div className="h-screen w-full bg-[#07090F] text-slate-100 flex flex-col overflow-hidden select-none">
+    <div className="h-dvh w-full bg-[#07090F] text-slate-100 flex flex-col overflow-hidden select-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       {/* Top Tactical Acoustic HUD */}
-      <header className="w-full border-b border-slate-800/90 bg-[#0A0E18] px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-4 min-w-0">
+      <header className="w-full border-b border-slate-800/90 bg-[#0A0E18] px-2.5 sm:px-6 py-1.5 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 sm:gap-4 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           <button
             type="button"
             onClick={onExitToMenu}
-            className="text-slate-400 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
+            aria-label="Voltar ao Menu"
+            className="text-slate-400 hover:text-white transition-colors flex items-center gap-1 text-xs font-medium cursor-pointer shrink-0 py-1"
           >
             <LogOut className="w-4 h-4" />
-            Menu
+            <span className="hidden sm:inline">Menu</span>
           </button>
           <span className="text-slate-700" aria-hidden="true">
             |
           </span>
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
             {!avatarError ? (
               <img
                 src={activeCharacter.portrait}
                 alt={activeCharacter.name}
                 referrerPolicy="no-referrer"
                 onError={() => setAvatarError(true)}
-                className="w-8 h-8 rounded-md object-cover border border-slate-700 shrink-0 hidden sm:block"
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-md object-cover border border-slate-700 shrink-0 hidden sm:block"
               />
             ) : null}
             <div className="min-w-0">
-              <h1 className="font-display text-lg font-bold text-white leading-none truncate">
+              <h1 className="font-display text-sm sm:text-lg font-bold text-white leading-none truncate max-w-[140px] sm:max-w-none">
                 {activeCharacter.name} · {level.title}
               </h1>
-              <p className="text-xs text-slate-400 truncate mt-0.5">{level.objectiveHint}</p>
+              <p className="hidden md:block text-xs text-slate-400 truncate mt-0.5">
+                {level.objectiveHint}
+              </p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-5 shrink-0 font-mono-tabular text-xs">
-          {/* HP */}
-          <div className="flex items-center gap-1.5" aria-label={`Vitalidade ${hud.hp} de ${hud.maxHp}`}>
-            {Array.from({ length: hud.maxHp }).map((_, i) => (
-              <Heart
-                key={i}
-                className={`w-4 h-4 ${
-                  i < hud.hp ? 'text-rose-400 fill-rose-400' : 'text-slate-700'
-                }`}
-              />
-            ))}
-            <span className="ml-1 text-slate-300">
-              {hud.hp}/{hud.maxHp}
-            </span>
+        <div className="flex items-center gap-2.5 sm:gap-5 shrink-0 font-mono-tabular text-xs">
+          {/* HP + Tactical Vest Shield (SAO/Free Fire) */}
+          <div className="flex items-center gap-1.5 sm:gap-2" aria-label={`Vitalidade ${hud.hp} de ${hud.maxHp}`}>
+            <div className="flex items-center gap-0.5 sm:gap-1">
+              {Array.from({ length: hud.maxHp }).map((_, i) => (
+                <Heart
+                  key={i}
+                  className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                    i < hud.hp ? 'text-rose-400 fill-rose-400' : 'text-slate-700'
+                  }`}
+                />
+              ))}
+              <span className="ml-0.5 text-slate-300 text-[11px] sm:text-xs">
+                {hud.hp}/{hud.maxHp}
+              </span>
+            </div>
+            {hud.armorShield > 0 && (
+              <div
+                className="flex items-center gap-0.5 text-sky-300"
+                title="Colete Tático: absorve 1 ponto de dano antes da vida"
+              >
+                {Array.from({ length: hud.armorShield }).map((_, i) => (
+                  <Shield key={i} className="w-3 h-3 sm:w-3.5 sm:h-3.5 fill-sky-400/40 text-sky-300" />
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Breath Meter */}
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">Fôlego</span>
-            <div className="w-16 h-2 bg-slate-800 rounded-sm overflow-hidden">
-              <div
-                className={`h-full transition-all duration-100 ${
-                  hud.breathGasping
-                    ? 'bg-rose-500'
-                    : hud.isHoldingBreath
-                      ? 'bg-sky-400'
-                      : 'bg-cyan-400'
-                }`}
-                style={{ width: `${hud.breath}%` }}
-              />
+          {/* Breath & Sword Skill Energy Meters */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5" title="Fôlego para segurar respiração">
+              <span className="text-slate-400 hidden sm:inline">Fôlego</span>
+              <div className="w-10 sm:w-14 h-2 bg-slate-800 rounded-sm overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-100 ${
+                    hud.breathGasping
+                      ? 'bg-rose-500'
+                      : hud.isHoldingBreath
+                        ? 'bg-sky-400'
+                        : 'bg-cyan-400'
+                  }`}
+                  style={{ width: `${hud.breath}%` }}
+                />
+              </div>
             </div>
-            <span className="w-8 text-right text-slate-200">{hud.breath}%</span>
+
+            <div
+              className="flex items-center gap-1"
+              title="Energia Aincrad para Sword Skills [1] Sonic Leap e [2] Vorpal Strike"
+            >
+              <Zap className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <div className="hidden sm:block w-14 h-2 bg-slate-800 rounded-sm overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-sky-400 to-purple-400 transition-all duration-100"
+                  style={{ width: `${hud.swordEnergy}%` }}
+                />
+              </div>
+              <span className="text-purple-200 text-[11px] sm:text-xs">{hud.swordEnergy}%</span>
+            </div>
           </div>
 
           {/* Harmonia Sonora Meter */}
@@ -843,7 +1045,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
           </div>
 
           {/* Weather Event, Dynamic Namibe Wind, Ambient Sonar Volume, Decibels & Camouflage */}
-          <div className="hidden sm:flex items-center gap-3">
+          <div className="hidden xl:flex items-center gap-3">
             <span className="flex items-center gap-1.5 text-slate-200">
               {hud.weatherEvent === 'tempestade_kwanza' ? (
                 <CloudRain className="w-3.5 h-3.5 text-sky-400" />
@@ -894,8 +1096,8 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
             </span>
           </div>
 
-          {/* Alert State, Crystals & Diaries */}
-          <div className="hidden md:flex items-center gap-3">
+          {/* Alert State, Crystals, Crates & Diaries */}
+          <div className="hidden md:flex items-center gap-2.5">
             <span className={`font-semibold ${alertColor}`}>{alertText}</span>
             <span aria-hidden="true" className="text-slate-700">
               ·
@@ -906,23 +1108,51 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
             <span aria-hidden="true" className="text-slate-700">
               ·
             </span>
-            <span className="text-amber-200">
-              Diários {hud.diariesCollectedInLevel}/{hud.diariesTotalInLevel}
+            <span className="text-sky-300 flex items-center gap-1">
+              <Package className="w-3.5 h-3.5" />
+              {hud.cratesOpened}/{hud.cratesTotal}
             </span>
             <span aria-hidden="true" className="text-slate-700">
+              ·
+            </span>
+            <span className="text-amber-200 hidden lg:inline">
+              Diários {hud.diariesCollectedInLevel}/{hud.diariesTotalInLevel}
+            </span>
+            <span aria-hidden="true" className="text-slate-700 hidden lg:inline">
               ·
             </span>
             <span className="text-slate-300">{hud.elapsedSeconds}s</span>
           </div>
 
           {/* Controls */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                touchOverrideRef.current = true;
+                setShowTouchControls((v) => !v);
+              }}
+              title={
+                showTouchControls
+                  ? 'Ocultar Joystick e Controles Táteis'
+                  : 'Exibir Joystick e Controles Táteis (Celular/Tablet)'
+              }
+              aria-label="Alternar controles táteis"
+              aria-pressed={showTouchControls}
+              className={`p-1.5 sm:p-2 rounded-lg border transition-colors cursor-pointer ${
+                showTouchControls
+                  ? 'border-cyan-400/70 bg-cyan-500/15 text-cyan-200'
+                  : 'border-slate-800 text-slate-400 hover:text-white hover:border-slate-600'
+              }`}
+            >
+              <Gamepad2 className="w-4 h-4" />
+            </button>
             <button
               type="button"
               onClick={captureScreenshot}
               title="Modo Captura Sonora [F]: aplicar filtros sonoros visuais"
               aria-label="Modo Captura Sonora"
-              className="p-2 rounded-lg border border-cyan-500/40 text-cyan-300 hover:text-white hover:border-cyan-400 cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-lg border border-cyan-500/40 text-cyan-300 hover:text-white hover:border-cyan-400 cursor-pointer"
             >
               <Camera className="w-4 h-4" />
             </button>
@@ -933,7 +1163,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                 onOpenSettings('settings');
               }}
               aria-label="Configurações e Loja"
-              className="p-2 rounded-lg border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-lg border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 cursor-pointer"
             >
               <Sliders className="w-4 h-4" />
             </button>
@@ -941,7 +1171,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
               type="button"
               onClick={onToggleMute}
               aria-label={settings.muted ? 'Ativar áudio' : 'Silenciar áudio'}
-              className="p-2 rounded-lg border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-lg border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 cursor-pointer"
             >
               {settings.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>
@@ -953,17 +1183,17 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                 )
               }
               aria-label={gameState === 'PAUSED' ? 'Continuar' : 'Pausar'}
-              className="px-3 py-1.5 rounded-lg border border-slate-800 text-slate-200 hover:border-slate-600 flex items-center gap-1.5 cursor-pointer"
+              className="px-2 sm:px-3 py-1.5 rounded-lg border border-slate-800 text-slate-200 hover:border-slate-600 flex items-center gap-1.5 cursor-pointer"
             >
               {gameState === 'PAUSED' ? (
                 <>
                   <Play className="w-3.5 h-3.5" />
-                  Continuar
+                  <span className="hidden sm:inline">Continuar</span>
                 </>
               ) : (
                 <>
                   <Pause className="w-3.5 h-3.5" />
-                  Pausar
+                  <span className="hidden sm:inline">Pausar</span>
                 </>
               )}
             </button>
@@ -975,27 +1205,28 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
       <div ref={containerRef} className="relative flex-1 w-full overflow-hidden bg-[#06080E]">
         <canvas
           ref={canvasRef}
+          onPointerDown={handleCanvasPointerMove}
           onPointerMove={handleCanvasPointerMove}
           onClick={handleCanvasClick}
-          className="block w-full h-full cursor-crosshair"
+          className="block w-full h-full cursor-crosshair touch-none select-none"
         />
 
         {/* Environmental Sound Diary Playback Subtitle Overlay */}
         {activeDiary && (
           <aside
             aria-live="polite"
-            className="absolute top-4 left-4 z-10 max-w-md bg-[#0A0E18]/92 border border-slate-700/90 backdrop-blur-sm rounded-xl p-4 shadow-xl space-y-2"
+            className="absolute top-2 left-2 sm:top-4 sm:left-4 z-10 max-w-[calc(100vw-154px)] sm:max-w-md bg-[#0A0E18]/92 border border-slate-700/90 backdrop-blur-sm rounded-xl p-3 sm:p-4 shadow-xl space-y-1.5 sm:space-y-2"
           >
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start justify-between gap-2 sm:gap-3">
               <div className="min-w-0">
                 <p
-                  className="text-[11px] font-semibold"
+                  className="text-[10px] sm:text-[11px] font-semibold truncate"
                   style={{ color: activeDiary.accentColor }}
                 >
-                  {activeDiary.chapter} · Diário Sonoro (+1 Frag. Eco)
+                  {activeDiary.chapter} · Diário (+1 Eco)
                 </p>
-                <h3 className="font-display text-lg font-bold text-white leading-tight flex items-center gap-2 mt-0.5">
-                  <BookOpen className="w-4 h-4 shrink-0" style={{ color: activeDiary.accentColor }} />
+                <h3 className="font-display text-base sm:text-lg font-bold text-white leading-tight flex items-center gap-1.5 sm:gap-2 mt-0.5">
+                  <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" style={{ color: activeDiary.accentColor }} />
                   <span className="truncate">{activeDiary.title}</span>
                 </h3>
               </div>
@@ -1011,60 +1242,286 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-            <p className="text-xs text-slate-200 leading-relaxed">{activeDiary.transcript}</p>
+            <p className="text-[11px] sm:text-xs text-slate-200 leading-relaxed line-clamp-3 sm:line-clamp-none">
+              {activeDiary.transcript}
+            </p>
           </aside>
         )}
 
-        {/* Combos Sonoros Rhythm Multiplier Indicator (top-right corner) */}
-        {gameState === 'PLAYING' && hud.soundComboCount >= 1 && (
+        {/* Top-Left / Top-Center Stack: Safe Zone Warning + SAO Boss Bar (never overlaps Mini-Radar) */}
+        <div className="pointer-events-none absolute top-2 left-2 right-[142px] sm:top-3 sm:left-4 sm:right-[184px] lg:left-1/2 lg:right-auto lg:-translate-x-1/2 lg:w-[min(44vw,420px)] z-10 flex flex-col items-stretch sm:items-center gap-1.5">
+          {gameState === 'PLAYING' && hud.playerOutsideSafeZone && (
+            <div className="bg-rose-950/92 border border-rose-400/80 px-2.5 sm:px-4 py-1 sm:py-1.5 flex items-center justify-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs font-mono-tabular font-bold text-rose-100 shadow-lg text-center">
+              <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-300 animate-pulse shrink-0" />
+              <span className="truncate">
+                FORA DA ZONA ({hud.safeZoneDistMeters}m) — RETORNE!
+              </span>
+            </div>
+          )}
+
+          {/* SAO Multi-Bar Floor Boss HUD */}
+          {gameState === 'PLAYING' && hud.boss && !hud.boss.defeated && (() => {
+            const boss = hud.boss;
+            const barSize = boss.maxHp / Math.max(1, boss.bars);
+            const remainingBars = Math.max(1, Math.ceil(boss.hp / barSize));
+            const currentBarPct =
+              boss.hp <= 0
+                ? 0
+                : ((boss.hp - (remainingBars - 1) * barSize) / barSize) * 100;
+            const stancePct = Math.round((boss.stance / Math.max(1, boss.maxStance)) * 100);
+            return (
+              <div className="w-full bg-[#0A0E18]/92 border border-slate-700/90 sao-frame px-3 sm:px-4 py-1.5 sm:py-2.5 shadow-2xl space-y-1 sm:space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex items-center gap-1.5 sm:gap-2">
+                    <Skull className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" style={{ color: boss.accentColor }} />
+                    <div className="min-w-0">
+                      <p className="font-display text-xs sm:text-sm font-extrabold text-white leading-none truncate">
+                        {boss.name}
+                      </p>
+                      <p className="hidden sm:block text-[10px] text-slate-400 truncate mt-0.5">
+                        {boss.title}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 sm:gap-2 font-mono-tabular text-[11px] sm:text-xs shrink-0">
+                    {boss.stunned ? (
+                      <span className="text-sky-300 font-bold">ATORDOADO</span>
+                    ) : boss.telegraphing ? (
+                      <span className="text-rose-400 font-bold animate-pulse">AoE!</span>
+                    ) : null}
+                    <span className="text-amber-300 font-bold">×{remainingBars}</span>
+                  </div>
+                </div>
+
+                {/* Active SAO HP Segment Bar */}
+                <div className="w-full h-2 sm:h-2.5 bg-slate-900 border border-slate-700 overflow-hidden">
+                  <div
+                    className="h-full transition-all duration-100"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, currentBarPct))}%`,
+                      backgroundColor:
+                        remainingBars >= 3
+                          ? '#34D399'
+                          : remainingBars === 2
+                            ? '#FBBF24'
+                            : '#F43F5E',
+                    }}
+                  />
+                </div>
+
+                {/* Stance / Guard Break Gauge */}
+                <div className="flex items-center justify-between gap-2 text-[9px] sm:text-[10px] font-mono-tabular text-slate-400">
+                  <span>Postura</span>
+                  <div className="flex-1 h-1 bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full bg-sky-400 transition-all duration-100"
+                      style={{ width: `${stancePct}%` }}
+                    />
+                  </div>
+                  <span>
+                    {boss.hp}/{boss.maxHp}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Supply Crate Loot Toast */}
+        {gameState === 'PLAYING' && hud.recentLootToast && (
           <div
-            aria-label={`Combo Sonoro ${hud.soundComboCount} manobras, multiplicador ${hud.soundComboMultiplier.toFixed(1)}x`}
-            className="pointer-events-none absolute top-4 right-4 z-10 bg-[#0A0E18]/90 border border-slate-700/90 backdrop-blur-sm rounded-xl px-4 py-2.5 min-w-[185px] shadow-xl space-y-1.5"
+            aria-live="polite"
+            className="pointer-events-none absolute top-20 sm:top-24 left-2 sm:left-4 z-10 bg-[#0A0E18]/94 border border-slate-700/90 sao-frame px-3 sm:px-4 py-2 sm:py-2.5 shadow-xl flex items-center gap-2.5 sm:gap-3 max-w-[calc(100vw-154px)] sm:max-w-xs"
           >
-            <div className="flex items-baseline justify-between gap-3 font-mono-tabular">
-              <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                Combo Sonoro
-              </span>
-              <span
-                className={`text-base font-extrabold leading-none ${
-                  hud.soundComboMultiplier >= 2.5
-                    ? 'text-emerald-300'
-                    : hud.soundComboMultiplier >= 2.0
-                      ? 'text-amber-300'
-                      : hud.soundComboMultiplier > 1.0
-                        ? 'text-cyan-300'
-                        : 'text-slate-200'
-                }`}
+            <Package className="w-4 h-4 shrink-0" style={{ color: hud.recentLootToast.accentColor }} />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-white truncate">{hud.recentLootToast.title}</p>
+              <p
+                className="text-[11px] font-mono-tabular truncate"
+                style={{ color: hud.recentLootToast.accentColor }}
               >
-                {hud.soundComboMultiplier.toFixed(1)}x
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-white font-semibold truncate">{hud.soundComboLabel}</span>
-              <span className="font-mono-tabular text-slate-400 shrink-0">
-                {hud.soundComboCount}x
-              </span>
-            </div>
-            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-100 ${
-                  hud.soundComboMultiplier >= 2.5
-                    ? 'bg-emerald-400'
-                    : hud.soundComboMultiplier >= 2.0
-                      ? 'bg-amber-400'
-                      : 'bg-cyan-400'
-                }`}
-                style={{ width: `${hud.soundComboTimerPct}%` }}
-              />
+                {hud.recentLootToast.detail}
+              </p>
             </div>
           </div>
         )}
+
+        {/* Top-Right Free Fire Tactical Mini-Radar + Sound Combo Stack */}
+        <div className="pointer-events-none absolute top-2 right-2 sm:top-3 sm:right-4 z-10 flex flex-col items-end gap-1.5 sm:gap-2">
+          {/* Free Fire Mini-Radar */}
+          <div className="bg-[#0A0E18]/90 border border-slate-700/90 sao-frame p-1.5 sm:p-2 shadow-xl space-y-1 sm:space-y-1.5">
+            <div className="flex items-center justify-between gap-2 sm:gap-3 text-[9px] sm:text-[10px] font-mono-tabular">
+              <span className="text-cyan-300 font-semibold truncate max-w-[54px] sm:max-w-none">
+                {level.sectorTag}
+              </span>
+              <span
+                className={
+                  hud.safeZonePhase === 'fechando'
+                    ? 'text-rose-400 font-bold animate-pulse'
+                    : hud.safeZoneLockedFinal
+                      ? 'text-amber-300 font-bold'
+                      : 'text-slate-300'
+                }
+              >
+                {hud.safeZoneLockedFinal
+                  ? 'Final'
+                  : hud.safeZonePhase === 'fechando'
+                    ? `Fecha ${hud.safeZoneTimeRemaining}s`
+                    : `Z${hud.safeZoneStage}/${hud.safeZoneTotalStages} · ${hud.safeZoneTimeRemaining}s`}
+              </span>
+            </div>
+            <svg
+              viewBox={`0 0 ${hud.radar.worldWidth} ${hud.radar.worldHeight}`}
+              className="block w-[122px] h-[48px] sm:w-[156px] sm:h-[62px] md:w-[182px] md:h-[72px] bg-[#05070D] border border-slate-800 rounded-sm overflow-hidden"
+            >
+              {/* Crimson Storm Haze Outside Active Safe Zone */}
+              <path
+                d={`M -1200 -1200 H ${hud.radar.worldWidth + 1200} V ${hud.radar.worldHeight + 1200} H -1200 Z M ${hud.radar.safeX} ${hud.radar.safeY - hud.radar.safeRadius} A ${hud.radar.safeRadius} ${hud.radar.safeRadius} 0 1 0 ${hud.radar.safeX} ${hud.radar.safeY + hud.radar.safeRadius} A ${hud.radar.safeRadius} ${hud.radar.safeRadius} 0 1 0 ${hud.radar.safeX} ${hud.radar.safeY - hud.radar.safeRadius} Z`}
+                fill="rgba(225, 29, 72, 0.32)"
+                fillRule="evenodd"
+              />
+              {/* Active Safe Zone Border */}
+              <circle
+                cx={hud.radar.safeX}
+                cy={hud.radar.safeY}
+                r={hud.radar.safeRadius}
+                fill="none"
+                stroke="#FB7185"
+                strokeWidth={24}
+              />
+              {/* Next Safe Zone Target Circle */}
+              {!hud.safeZoneLockedFinal && (
+                <circle
+                  cx={hud.radar.targetSafeX}
+                  cy={hud.radar.targetSafeY}
+                  r={hud.radar.targetSafeRadius}
+                  fill="none"
+                  stroke="rgba(248, 250, 252, 0.55)"
+                  strokeWidth={18}
+                  strokeDasharray="65 45"
+                />
+              )}
+              {/* Tactical Dotted Line to Safe Circle */}
+              {(hud.playerOutsideSafeZone || hud.playerOutsideTargetZone) && (
+                <line
+                  x1={hud.radar.playerX}
+                  y1={hud.radar.playerY}
+                  x2={hud.playerOutsideSafeZone ? hud.radar.safeX : hud.radar.targetSafeX}
+                  y2={hud.playerOutsideSafeZone ? hud.radar.safeY : hud.radar.targetSafeY}
+                  stroke={hud.playerOutsideSafeZone ? '#FB7185' : 'rgba(248, 250, 252, 0.55)'}
+                  strokeWidth={16}
+                  strokeDasharray="50 40"
+                />
+              )}
+              {/* Unopened Supply Crates */}
+              {hud.radar.crates
+                .filter((c) => !c.opened)
+                .map((c, idx) => (
+                  <rect
+                    key={idx}
+                    x={c.x - 28}
+                    y={c.y - 28}
+                    width={56}
+                    height={56}
+                    fill="#FBBF24"
+                  />
+                ))}
+              {/* Alerted Enemies */}
+              {hud.radar.enemies
+                .filter((e) => e.alert !== 'patrol')
+                .map((e, idx) => (
+                  <circle key={idx} cx={e.x} cy={e.y} r={34} fill="#F43F5E" />
+                ))}
+              {/* Exit Portal */}
+              <rect
+                x={hud.radar.exitX - 42}
+                y={hud.radar.exitY - 42}
+                width={84}
+                height={84}
+                fill={hud.radar.boss && !hud.radar.boss.defeated ? '#F43F5E' : '#34D399'}
+              />
+              {/* Floor Boss */}
+              {hud.radar.boss && !hud.radar.boss.defeated && (
+                <circle cx={hud.radar.boss.x} cy={hud.radar.boss.y} r={54} fill="#F43F5E" />
+              )}
+              {/* Player */}
+              <circle
+                cx={hud.radar.playerX}
+                cy={hud.radar.playerY}
+                r={48}
+                fill="#22D3EE"
+                stroke="#F8FAFC"
+                strokeWidth={18}
+              />
+            </svg>
+            {(hud.playerOutsideSafeZone || hud.playerOutsideTargetZone) && (
+              <p
+                className={`text-[10px] font-mono-tabular text-right ${
+                  hud.playerOutsideSafeZone ? 'text-rose-300 font-bold' : 'text-slate-300'
+                }`}
+              >
+                {hud.playerOutsideSafeZone
+                  ? `Tempestade: ${hud.safeZoneDistMeters}m até área segura`
+                  : `Avance furtivo: ${hud.safeZoneTargetDistMeters}m p/ próx. círculo`}
+              </p>
+            )}
+          </div>
+
+          {/* Combos Sonoros Rhythm Multiplier Indicator */}
+          {gameState === 'PLAYING' && hud.soundComboCount >= 1 && (
+            <div
+              aria-label={`Combo Sonoro ${hud.soundComboCount} manobras, multiplicador ${hud.soundComboMultiplier.toFixed(1)}x`}
+              className="bg-[#0A0E18]/90 border border-slate-700/90 sao-frame px-2.5 sm:px-4 py-1.5 sm:py-2 min-w-[130px] sm:min-w-[185px] shadow-xl space-y-1"
+            >
+              <div className="flex items-baseline justify-between gap-2 font-mono-tabular">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+                  Combo
+                </span>
+                <span
+                  className={`text-sm sm:text-base font-extrabold leading-none ${
+                    hud.soundComboMultiplier >= 2.5
+                      ? 'text-emerald-300'
+                      : hud.soundComboMultiplier >= 2.0
+                        ? 'text-amber-300'
+                        : hud.soundComboMultiplier > 1.0
+                          ? 'text-cyan-300'
+                          : 'text-slate-200'
+                  }`}
+                >
+                  {hud.soundComboMultiplier.toFixed(1)}x
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[11px] sm:text-xs">
+                <span className="text-white font-semibold truncate max-w-[90px] sm:max-w-none">
+                  {hud.soundComboLabel}
+                </span>
+                <span className="font-mono-tabular text-slate-400 shrink-0">
+                  {hud.soundComboCount}x
+                </span>
+              </div>
+              <div className="w-full h-1 sm:h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-100 ${
+                    hud.soundComboMultiplier >= 2.5
+                      ? 'bg-emerald-400'
+                      : hud.soundComboMultiplier >= 2.0
+                        ? 'bg-amber-400'
+                        : 'bg-cyan-400'
+                  }`}
+                  style={{ width: `${hud.soundComboTimerPct}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Quick Environmental Camouflage Suggestion when stationary near a creature */}
         {gameState === 'PLAYING' && hud.camouflageHint && !hintDismissed && (
           <aside
             aria-live="polite"
-            className="absolute bottom-40 md:bottom-4 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-lg z-10 bg-[#0A0E18]/94 border border-slate-700/90 backdrop-blur-sm rounded-xl px-4 py-3 shadow-2xl"
+            className={`absolute left-2.5 right-2.5 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-lg z-10 bg-[#0A0E18]/94 border border-slate-700/90 backdrop-blur-sm rounded-xl px-3.5 sm:px-4 py-2.5 sm:py-3 shadow-2xl ${
+              showTouchControls ? 'bottom-[168px] sm:bottom-[184px] lg:bottom-5' : 'bottom-4'
+            }`}
             style={{ borderLeftWidth: '4px', borderLeftColor: hud.camouflageHint.accentColor }}
           >
             <div className="flex items-start justify-between gap-3">
@@ -1088,10 +1545,10 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                     {hud.camouflageHint.actionTag}
                   </span>
                 </div>
-                <p className="text-sm font-bold text-white leading-tight">
+                <p className="text-xs sm:text-sm font-bold text-white leading-tight">
                   {hud.camouflageHint.title}
                 </p>
-                <p className="text-xs text-slate-200 leading-relaxed">
+                <p className="text-[11px] sm:text-xs text-slate-200 leading-relaxed">
                   {hud.camouflageHint.suggestion}
                 </p>
               </div>
@@ -1107,60 +1564,97 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
           </aside>
         )}
 
-        {/* On-Screen Touch D-Pad for mobile / mouse-accessibility */}
-        <div className="md:hidden absolute bottom-4 left-4 grid grid-cols-3 gap-1.5 w-32 h-32 opacity-80">
-          <div />
-          <button
-            type="button"
-            onPointerDown={() => engineRef.current?.setTouchMove(0, -1)}
-            onPointerUp={() => engineRef.current?.setTouchMove(0, 0)}
-            onPointerLeave={() => engineRef.current?.setTouchMove(0, 0)}
-            className="bg-slate-900/90 border border-slate-700 rounded-md text-xs font-bold text-cyan-300"
-          >
-            ▲
-          </button>
-          <div />
-          <button
-            type="button"
-            onPointerDown={() => engineRef.current?.setTouchMove(-1, 0)}
-            onPointerUp={() => engineRef.current?.setTouchMove(0, 0)}
-            onPointerLeave={() => engineRef.current?.setTouchMove(0, 0)}
-            className="bg-slate-900/90 border border-slate-700 rounded-md text-xs font-bold text-cyan-300"
-          >
-            ◀
-          </button>
-          <div />
-          <button
-            type="button"
-            onPointerDown={() => engineRef.current?.setTouchMove(1, 0)}
-            onPointerUp={() => engineRef.current?.setTouchMove(0, 0)}
-            onPointerLeave={() => engineRef.current?.setTouchMove(0, 0)}
-            className="bg-slate-900/90 border border-slate-700 rounded-md text-xs font-bold text-cyan-300"
-          >
-            ▶
-          </button>
-          <div />
-          <button
-            type="button"
-            onPointerDown={() => engineRef.current?.setTouchMove(0, 1)}
-            onPointerUp={() => engineRef.current?.setTouchMove(0, 0)}
-            onPointerLeave={() => engineRef.current?.setTouchMove(0, 0)}
-            className="bg-slate-900/90 border border-slate-700 rounded-md text-xs font-bold text-cyan-300"
-          >
-            ▼
-          </button>
-          <div />
-        </div>
+        {/* Mobile & Tablet Touch Controls: Quick Posture Toggles + 360 Analog Virtual Joystick */}
+        {showTouchControls && gameState === 'PLAYING' && (
+          <div className="absolute bottom-2.5 left-2.5 sm:bottom-4 sm:left-4 z-10 flex flex-col items-start gap-2 select-none">
+            {/* Crouch & Sprint Toggle Row */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={toggleTouchCrouch}
+                aria-pressed={touchCrouch}
+                className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold tracking-tight transition-colors touch-none select-none cursor-pointer ${
+                  touchCrouch
+                    ? 'bg-cyan-400/25 border-cyan-300 text-cyan-100 shadow-[0_0_10px_rgba(34,211,238,0.28)]'
+                    : 'bg-[#0A0E18]/88 border-slate-700 text-slate-300'
+                }`}
+              >
+                {touchCrouch ? 'Agachado ✓' : 'Agachar'}
+              </button>
+              <button
+                type="button"
+                onClick={toggleTouchSprint}
+                aria-pressed={touchSprint}
+                className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold tracking-tight transition-colors touch-none select-none cursor-pointer ${
+                  touchSprint
+                    ? 'bg-amber-400/25 border-amber-300 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.28)]'
+                    : 'bg-[#0A0E18]/88 border-slate-700 text-slate-300'
+                }`}
+              >
+                {touchSprint ? 'Correndo ✓' : 'Correr'}
+              </button>
+            </div>
+
+            {/* 360° Analog Virtual Joystick */}
+            <div
+              ref={joystickBaseRef}
+              role="application"
+              aria-label="Joystick tátil de movimento"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                soundEngine.unlock();
+                joystickPointerIdRef.current = e.pointerId;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                updateJoystickFromClient(e.clientX, e.clientY);
+              }}
+              onPointerMove={(e) => {
+                if (joystickPointerIdRef.current !== e.pointerId) return;
+                e.preventDefault();
+                updateJoystickFromClient(e.clientX, e.clientY);
+              }}
+              onPointerUp={(e) => {
+                if (joystickPointerIdRef.current !== e.pointerId) return;
+                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                }
+                resetJoystick();
+              }}
+              onPointerCancel={(e) => {
+                if (joystickPointerIdRef.current !== e.pointerId) return;
+                resetJoystick();
+              }}
+              onLostPointerCapture={() => {
+                resetJoystick();
+              }}
+              className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-[#070B14]/75 border border-cyan-400/40 backdrop-blur-sm touch-none select-none flex items-center justify-center shadow-2xl"
+            >
+              {/* Crosshair rings */}
+              <div className="pointer-events-none absolute inset-3 rounded-full border border-slate-700/60" />
+              <div className="pointer-events-none absolute inset-x-4 top-1/2 h-px bg-slate-700/40" />
+              <div className="pointer-events-none absolute inset-y-4 left-1/2 w-px bg-slate-700/40" />
+              {/* Draggable Thumb Puck */}
+              <div
+                className="pointer-events-none w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-cyan-400/25 border-2 border-cyan-300 shadow-[0_0_14px_rgba(34,211,238,0.45)] flex items-center justify-center"
+                style={{
+                  transform: `translate3d(${joystickKnob.x.toFixed(1)}px, ${joystickKnob.y.toFixed(1)}px, 0px)`,
+                }}
+              >
+                <div className="w-3 h-3 rounded-full bg-cyan-200" />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Synchronized Corner Heartbeat Indicator */}
         <div
           ref={heartbeatCardRef}
           aria-label={`Ritmo cardíaco: ${hud.heartRateBpm} batimentos por minuto`}
-          className="pointer-events-none absolute bottom-4 right-4 z-10 bg-[#0A0E18]/88 border border-slate-800/90 backdrop-blur-sm rounded-xl px-3.5 py-2.5 flex items-center gap-3 will-change-transform"
+          className="pointer-events-none absolute bottom-2.5 right-2.5 sm:bottom-4 sm:right-4 z-10 bg-[#0A0E18]/88 border border-slate-800/90 backdrop-blur-sm rounded-xl px-2.5 py-1.5 sm:px-3.5 sm:py-2.5 flex items-center gap-2 sm:gap-3 will-change-transform"
         >
           <div ref={heartbeatIconRef} className="shrink-0 will-change-transform">
             <Heart
-              className={`w-5 h-5 transition-colors duration-200 ${
+              className={`w-4 h-4 sm:w-5 sm:h-5 transition-colors duration-200 ${
                 hud.heartRateBpm >= 136
                   ? 'text-rose-400 fill-rose-500/80'
                   : hud.heartRateBpm >= 104
@@ -1171,9 +1665,9 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
           </div>
 
           <div className="flex flex-col gap-0.5">
-            <div className="flex items-baseline justify-between gap-3 font-mono-tabular">
+            <div className="flex items-baseline justify-between gap-2 sm:gap-3 font-mono-tabular">
               <span
-                className={`text-sm font-bold leading-none ${
+                className={`text-xs sm:text-sm font-bold leading-none ${
                   hud.heartRateBpm >= 136
                     ? 'text-rose-300'
                     : hud.heartRateBpm >= 104
@@ -1183,7 +1677,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
               >
                 {hud.heartRateBpm} BPM
               </span>
-              <span className="text-[11px] font-sans font-medium text-slate-400 leading-none">
+              <span className="hidden sm:inline text-[11px] font-sans font-medium text-slate-400 leading-none">
                 {hud.heartRateBpm >= 136
                   ? 'Frenético'
                   : hud.heartRateBpm >= 104
@@ -1195,19 +1689,19 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
               ref={heartbeatCanvasRef}
               width={120}
               height={28}
-              className="block w-[120px] h-[28px]"
+              className="block w-[70px] h-[22px] sm:w-[120px] sm:h-[28px]"
             />
           </div>
         </div>
 
         {/* Pause / Game Over / Summary Modals */}
         {gameState !== 'PLAYING' && (
-          <div className="absolute inset-0 bg-[#07090F]/82 backdrop-blur-sm flex items-center justify-center p-6 z-20">
-            <div className="max-w-md w-full bg-[#0E1422] border border-slate-700 rounded-xl p-6 space-y-5 shadow-2xl">
+          <div className="absolute inset-0 bg-[#07090F]/82 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 z-20">
+            <div className="max-w-md w-full bg-[#0E1422] border border-slate-700 rounded-xl p-4 sm:p-6 space-y-4 sm:space-y-5 shadow-2xl max-h-[90dvh] overflow-y-auto">
               {gameState === 'PAUSED' && (
                 <>
                   <div className="space-y-1">
-                    <h2 className="font-display text-3xl font-extrabold text-white">
+                    <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-white">
                       Jogo Pausado
                     </h2>
                     <p className="text-sm text-cyan-300">
@@ -1216,12 +1710,14 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                     <p className="text-xs text-slate-400">{level.title}</p>
                   </div>
                   <div className="text-xs text-slate-400 space-y-1.5 border-t border-b border-slate-800 py-3">
-                    <p>WASD / Setas: Mover · Shift: Correr · C: Agachar</p>
-                    <p>Espaço: Segurar Respiração · Q ou Clique: Jogar Pedra · F: Captura Sonora</p>
+                    <p>Teclado: WASD/Setas mover · Shift correr · C agachar · Espaço fôlego</p>
+                    <p>Celular/Tablet: Joystick analógico · Agachar/Correr · Toque no mapa p/ seixo</p>
+                    <p>Habilidades: Q Pedra · 1 Sonic Leap · 2 Vorpal Strike · H Kit Médico</p>
                     {level.hasWhisperAbility && <p>E: Sussurro na Folha (cortina sonora)</p>}
                     {level.hasSilenceAbility && <p>R: Canto do Silêncio (bolha de vácuo)</p>}
+                    <p>F: Modo Captura Sonora</p>
                   </div>
-                  <div className="flex flex-wrap gap-3">
+                  <div className="flex flex-wrap gap-2.5 sm:gap-3">
                     <button
                       type="button"
                       onClick={() => setGameState('PLAYING')}
@@ -1232,7 +1728,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                     <button
                       type="button"
                       onClick={captureScreenshot}
-                      className="py-2.5 px-4 border border-cyan-500/50 text-cyan-200 font-medium text-sm rounded-lg hover:bg-cyan-500/10 flex items-center gap-1.5 cursor-pointer"
+                      className="py-2.5 px-3.5 sm:px-4 border border-cyan-500/50 text-cyan-200 font-medium text-sm rounded-lg hover:bg-cyan-500/10 flex items-center gap-1.5 cursor-pointer"
                     >
                       <Camera className="w-3.5 h-3.5" />
                       Capturar Tela
@@ -1240,21 +1736,21 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onOpenSettings('store')}
-                      className="py-2.5 px-4 border border-amber-500/50 text-amber-300 font-medium text-sm rounded-lg hover:bg-amber-500/10 cursor-pointer"
+                      className="py-2.5 px-3.5 sm:px-4 border border-amber-500/50 text-amber-300 font-medium text-sm rounded-lg hover:bg-amber-500/10 cursor-pointer"
                     >
                       Arsenal
                     </button>
                     <button
                       type="button"
                       onClick={restartLevel}
-                      className="py-2.5 px-4 border border-slate-700 text-slate-200 font-medium text-sm rounded-lg hover:bg-slate-800 cursor-pointer"
+                      className="py-2.5 px-3.5 sm:px-4 border border-slate-700 text-slate-200 font-medium text-sm rounded-lg hover:bg-slate-800 cursor-pointer"
                     >
                       Reiniciar
                     </button>
                     <button
                       type="button"
                       onClick={onExitToMenu}
-                      className="py-2.5 px-4 border border-slate-700 text-slate-300 font-medium text-sm rounded-lg hover:bg-slate-800 cursor-pointer"
+                      className="py-2.5 px-3.5 sm:px-4 border border-slate-700 text-slate-300 font-medium text-sm rounded-lg hover:bg-slate-800 cursor-pointer"
                     >
                       Menu
                     </button>
@@ -1416,26 +1912,34 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
         )}
       </div>
 
-      {/* Bottom Interactive Acoustic Action Bar */}
-      <footer className="w-full border-t border-slate-800/90 bg-[#0A0E18] px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-        <div className="flex flex-wrap items-center gap-2.5">
+      {/* Bottom Interactive Acoustic Action Bar (Single-row scrollable on phones/tablets) */}
+      <footer className="w-full border-t border-slate-800/90 bg-[#0A0E18] px-2.5 sm:px-6 py-1.5 sm:py-2.5 flex items-center justify-between gap-3 shrink-0">
+        <div className="flex flex-nowrap lg:flex-wrap items-center gap-2 overflow-x-auto no-scrollbar py-0.5 w-full lg:w-auto">
           {/* Hold Breath */}
           <button
             type="button"
-            onPointerDown={() => {
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
               soundEngine.unlock();
               engineRef.current?.setHoldBreath(true);
             }}
-            onPointerUp={() => engineRef.current?.setHoldBreath(false)}
-            onPointerLeave={() => engineRef.current?.setHoldBreath(false)}
-            className={`px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap ${
+            onPointerUp={(e) => {
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+              engineRef.current?.setHoldBreath(false);
+            }}
+            onPointerCancel={() => engineRef.current?.setHoldBreath(false)}
+            onLostPointerCapture={() => engineRef.current?.setHoldBreath(false)}
+            className={`px-3 sm:px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 sm:gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 touch-none select-none ${
               hud.isHoldingBreath
                 ? 'bg-sky-500/20 border-sky-400 text-sky-200'
                 : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
             }`}
           >
             <EarOff className="w-3.5 h-3.5" />
-            Segurar Fôlego (Espaço)
+            <span>Fôlego</span>
+            <span className="hidden sm:inline">(Espaço)</span>
           </button>
 
           {/* Throw Stone */}
@@ -1446,14 +1950,14 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
               soundEngine.unlock();
               engineRef.current?.triggerThrowStone();
             }}
-            className={`px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap font-mono-tabular ${
+            className={`px-3 sm:px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
               hud.stones > 0
                 ? 'bg-slate-900 border-amber-500/50 text-amber-300 hover:bg-amber-500/10 cursor-pointer'
                 : 'bg-slate-900/40 border-slate-800 text-slate-500 cursor-not-allowed'
             }`}
           >
             <CircleDot className="w-3.5 h-3.5" />
-            Pedra de Isca [Q] · {hud.stones}/{hud.maxStones}
+            <span>Pedra [Q] · {hud.stones}/{hud.maxStones}</span>
           </button>
 
           {/* Leaf Whisper */}
@@ -1465,7 +1969,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                 soundEngine.unlock();
                 engineRef.current?.triggerLeafWhisper();
               }}
-              className={`px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap font-mono-tabular ${
+              className={`px-3 sm:px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
                 hud.whisperReady
                   ? 'bg-slate-900 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10 cursor-pointer'
                   : 'bg-slate-900/40 border-slate-800 text-slate-500 cursor-not-allowed'
@@ -1473,7 +1977,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
             >
               <Wind className="w-3.5 h-3.5" />
               {hud.whisperReady
-                ? 'Sussurro na Folha [E]'
+                ? 'Sussurro [E]'
                 : `Sussurro (${hud.whisperCooldown}s)`}
             </button>
           )}
@@ -1487,7 +1991,7 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
                 soundEngine.unlock();
                 engineRef.current?.triggerSilenceChant();
               }}
-              className={`px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap font-mono-tabular ${
+              className={`px-3 sm:px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
                 hud.silenceActiveRemaining > 0
                   ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
                   : hud.silenceReady
@@ -1497,12 +2001,70 @@ export const GameCanvasView: React.FC<GameCanvasViewProps> = ({
             >
               <Sparkles className="w-3.5 h-3.5" />
               {hud.silenceActiveRemaining > 0
-                ? `Bolha de Silêncio (${hud.silenceActiveRemaining}s)`
+                ? `Silêncio (${hud.silenceActiveRemaining}s)`
                 : hud.silenceReady
-                  ? 'Canto do Silêncio [R]'
+                  ? 'Silêncio [R]'
                   : `Silêncio (${hud.silenceCooldown}s)`}
             </button>
           )}
+
+          {/* Sword Skill [1] Sonic Leap */}
+          <button
+            type="button"
+            disabled={!hud.sonicLeapReady}
+            onClick={() => {
+              soundEngine.unlock();
+              engineRef.current?.triggerSonicLeap();
+            }}
+            className={`px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+              hud.sonicLeapReady
+                ? 'bg-slate-900 border-sky-500/55 text-sky-300 hover:bg-sky-500/10 cursor-pointer'
+                : 'bg-slate-900/40 border-slate-800 text-slate-500 cursor-not-allowed'
+            }`}
+          >
+            <Sword className="w-3.5 h-3.5" />
+            {hud.sonicLeapCooldown > 0
+              ? `Sonic (${hud.sonicLeapCooldown}s)`
+              : 'Sonic Leap [1] · 25⚡'}
+          </button>
+
+          {/* Sword Skill [2] Vorpal Strike */}
+          <button
+            type="button"
+            disabled={!hud.vorpalSlashReady}
+            onClick={() => {
+              soundEngine.unlock();
+              engineRef.current?.triggerVorpalSlash();
+            }}
+            className={`px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+              hud.vorpalSlashReady
+                ? 'bg-slate-900 border-rose-500/55 text-rose-300 hover:bg-rose-500/10 cursor-pointer'
+                : 'bg-slate-900/40 border-slate-800 text-slate-500 cursor-not-allowed'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            {hud.vorpalSlashCooldown > 0
+              ? `Vorpal (${hud.vorpalSlashCooldown}s)`
+              : 'Vorpal [2] · 40⚡'}
+          </button>
+
+          {/* Medkit [H] */}
+          <button
+            type="button"
+            disabled={hud.medkits <= 0 || hud.hp >= hud.maxHp}
+            onClick={() => {
+              soundEngine.unlock();
+              engineRef.current?.triggerUseMedkit();
+            }}
+            className={`px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+              hud.medkits > 0 && hud.hp < hud.maxHp
+                ? 'bg-slate-900 border-emerald-500/55 text-emerald-300 hover:bg-emerald-500/10 cursor-pointer'
+                : 'bg-slate-900/40 border-slate-800 text-slate-500 cursor-not-allowed'
+            }`}
+          >
+            <Cross className="w-3.5 h-3.5" />
+            Kit [H] · {hud.medkits}
+          </button>
         </div>
 
         <div className="hidden lg:flex items-center gap-3 text-xs text-slate-400">

@@ -11,13 +11,24 @@ export type EnemyAlertState = 'patrol' | 'investigate' | 'hunt';
 export type WeatherEventType = 'calma' | 'neblina_namibe' | 'tempestade_kwanza' | 'cacimbo';
 export type CharacterId = 'nzinga' | 'kandimba' | 'lueji' | 'tchissola' | 'kimbamba';
 export type HarmonyEndingTier = 'harmonia_pura' | 'equilibrio_instavel' | 'dissonancia_caotica';
+export type DifficultyMode = 'padrao' | 'implacavel' | 'aincrad';
+export type BiomeVisualType =
+  | 'maiombe'
+  | 'miradouro'
+  | 'tundavala'
+  | 'bermuda'
+  | 'purgatorio'
+  | 'aincrad';
+
 export type SoundRecordId =
   | 'silencio_absoluto'
   | 'ecos_da_palanca'
   | 'sinfonia_do_maiombe'
   | 'senhor_das_tempestades'
   | 'mestre_das_iscas'
-  | 'campeao_da_tundavala';
+  | 'campeao_da_tundavala'
+  | 'cacador_de_andar'
+  | 'lenda_do_pinaculo';
 
 export type SoundDiaryId =
   | 'diario_luanda_sino'
@@ -25,7 +36,10 @@ export type SoundDiaryId =
   | 'diario_miradouro_queda'
   | 'diario_pacto_palanca'
   | 'diario_huila_broadcast'
-  | 'diario_juramento_nzinga';
+  | 'diario_juramento_nzinga'
+  | 'diario_cuanza_viaduto'
+  | 'diario_benguela_submersa'
+  | 'diario_aincrad_kalahari';
 
 export interface SoundDiaryDef {
   id: SoundDiaryId;
@@ -92,7 +106,7 @@ export interface GameSettings {
   muted: boolean;
   sonarSensitivity: 'baixa' | 'normal' | 'alta';
   reducedEffects: boolean;
-  difficulty: 'padrao' | 'implacavel';
+  difficulty: DifficultyMode;
   useMicAmbient: boolean;
 }
 
@@ -141,6 +155,90 @@ export interface ResonanceCrystal {
   pulsePhase: number;
 }
 
+export type SupplyCrateKind = 'medkit' | 'vest' | 'stones' | 'energy' | 'elixir';
+
+export interface SupplyCrateDef {
+  id: string;
+  x: number;
+  y: number;
+  kind: SupplyCrateKind;
+  label: string;
+  rarity: 'comum' | 'tatico' | 'lendario';
+}
+
+export interface SupplyCrateState extends SupplyCrateDef {
+  opened: boolean;
+  pulsePhase: number;
+}
+
+export interface SafeZoneStage {
+  waitDurationSec: number;
+  shrinkDurationSec: number;
+  center: Vec2;
+  radius: number;
+  damagePerSec: number;
+}
+
+export interface FloorBossDef {
+  id: string;
+  name: string;
+  title: string;
+  x: number;
+  y: number;
+  maxHp: number;
+  bars: number;
+  radius: number;
+  speedPatrol: number;
+  speedHunt: number;
+  hearingRadius: number;
+  accentColor: string;
+  patrolPoints: Vec2[];
+}
+
+export interface FloorBossState extends FloorBossDef {
+  hp: number;
+  stance: number;
+  maxStance: number;
+  defeated: boolean;
+  vx: number;
+  vy: number;
+  angle: number;
+  patrolIndex: number;
+  state: EnemyAlertState;
+  suspicion: number;
+  targetPos: Vec2 | null;
+  stateTimer: number;
+  sonarTimer: number;
+  telegraphTimer: number;
+  telegraphMaxTimer: number;
+  telegraphCooldown: number;
+  telegraphX: number;
+  telegraphY: number;
+  telegraphRadius: number;
+  stunnedTimer: number;
+  revealedAlpha: number;
+  hurtFlash: number;
+}
+
+export interface SlashArcEffect {
+  id: number;
+  x: number;
+  y: number;
+  angle: number;
+  radius: number;
+  color: string;
+  life: number;
+  maxLife: number;
+  kind: 'sonic_leap' | 'vorpal_slash';
+}
+
+export interface LootPickupToast {
+  id: number;
+  title: string;
+  detail: string;
+  accentColor: string;
+}
+
 export interface Enemy {
   id: string;
   type: EnemyType;
@@ -162,6 +260,7 @@ export interface Enemy {
   speedPatrol: number;
   speedHunt: number;
   revealedAlpha: number;
+  stunnedTimer: number;
 }
 
 export interface SoundWave {
@@ -175,7 +274,18 @@ export interface SoundWave {
   speed: number;
   alpha: number;
   color: string;
-  source: 'player' | 'stone' | 'wind' | 'leaf' | 'birds' | 'enemy' | 'thunder' | 'exit' | 'diary';
+  source:
+    | 'player'
+    | 'stone'
+    | 'wind'
+    | 'leaf'
+    | 'birds'
+    | 'enemy'
+    | 'thunder'
+    | 'exit'
+    | 'diary'
+    | 'sword'
+    | 'boss';
   loudness: number; // 0..100
   masked: boolean;
   thickness: number;
@@ -263,7 +373,11 @@ export interface PlayerState {
   radius: number;
   hp: number;
   maxHp: number;
+  armorShield: number;
+  maxArmorShield: number;
+  medkits: number;
   breath: number; // 0..100
+  swordEnergy: number; // 0..100
   isHoldingBreath: boolean;
   breathGasping: number; // >0 cooldown when breath hits 0
   isSprinting: boolean;
@@ -279,12 +393,22 @@ export interface PlayerState {
   whisperMaxCooldown: number;
   silenceCooldown: number;
   silenceMaxCooldown: number;
+  sonicLeapCooldown: number;
+  sonicLeapMaxCooldown: number;
+  vorpalSlashCooldown: number;
+  vorpalSlashMaxCooldown: number;
+  dashTimer: number;
+  dashVx: number;
+  dashVy: number;
   invulnerableTimer: number;
   scarfTrail: Vec2[];
 }
 
 export interface LevelConfig {
   id: number;
+  floorNumber: number;
+  sectorTag: string;
+  biomeVisual: BiomeVisualType;
   title: string;
   subtitle: string;
   objectiveHint: string;
@@ -314,12 +438,51 @@ export interface LevelConfig {
     type: EnemyType;
     patrolPoints: Vec2[];
   }>;
+  supplyCrates: SupplyCrateDef[];
+  safeZoneStages: SafeZoneStage[];
+  boss?: FloorBossDef;
+}
+
+export interface RadarSnapshot {
+  worldWidth: number;
+  worldHeight: number;
+  playerX: number;
+  playerY: number;
+  exitX: number;
+  exitY: number;
+  safeX: number;
+  safeY: number;
+  safeRadius: number;
+  targetSafeX: number;
+  targetSafeY: number;
+  targetSafeRadius: number;
+  crates: Array<{ x: number; y: number; opened: boolean }>;
+  boss: { x: number; y: number; defeated: boolean } | null;
+  enemies: Array<{ x: number; y: number; alert: EnemyAlertState }>;
+}
+
+export interface BossTelemetry {
+  name: string;
+  title: string;
+  hp: number;
+  maxHp: number;
+  bars: number;
+  stance: number;
+  maxStance: number;
+  stunned: boolean;
+  telegraphing: boolean;
+  defeated: boolean;
+  accentColor: string;
 }
 
 export interface HUDTelemetry {
   hp: number;
   maxHp: number;
+  armorShield: number;
+  maxArmorShield: number;
+  medkits: number;
   breath: number;
+  swordEnergy: number;
   isHoldingBreath: boolean;
   breathGasping: boolean;
   isCamouflaged: boolean;
@@ -335,8 +498,14 @@ export interface HUDTelemetry {
   silenceCooldown: number;
   hasSilenceAbility: boolean;
   silenceActiveRemaining: number;
+  sonicLeapReady: boolean;
+  sonicLeapCooldown: number;
+  vorpalSlashReady: boolean;
+  vorpalSlashCooldown: number;
   crystalsCollected: number;
   crystalsTotal: number;
+  cratesOpened: number;
+  cratesTotal: number;
   diariesCollectedInLevel: number;
   diariesTotalInLevel: number;
   stormActive: boolean;
@@ -362,6 +531,19 @@ export interface HUDTelemetry {
   soundComboLabel: string;
   maxSoundCombo: number;
   camouflageHint: CamouflageQuickHint | null;
+  safeZoneActive: boolean;
+  safeZonePhase: 'estavel' | 'fechando';
+  safeZoneTimeRemaining: number;
+  safeZoneStage: number;
+  safeZoneTotalStages: number;
+  safeZoneLockedFinal: boolean;
+  playerOutsideSafeZone: boolean;
+  safeZoneDistMeters: number;
+  playerOutsideTargetZone: boolean;
+  safeZoneTargetDistMeters: number;
+  boss: BossTelemetry | null;
+  recentLootToast: LootPickupToast | null;
+  radar: RadarSnapshot;
 }
 
 export interface CamouflageQuickHint {

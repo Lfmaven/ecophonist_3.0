@@ -11,6 +11,36 @@ import {
 } from './types';
 
 const STORAGE_KEY = 'ecophonist_progress_v2';
+const MAX_STORAGE_BYTES = 32768;
+export const TOTAL_LEVELS = 6;
+
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function createDefaultProgress(): SaveProgress {
+  return {
+    unlockedLevel: 1,
+    echoShards: 2,
+    selectedCharacter: 'nzinga',
+    ownedItems: [],
+    equippedItems: [],
+    unlockedRecords: [],
+    collectedDiaries: [],
+    settings: { ...DEFAULT_SETTINGS },
+    bestScores: {},
+  };
+}
+
+function safeParseJsonObject(raw: string): Record<string, unknown> | null {
+  if (!raw || raw.length > MAX_STORAGE_BYTES) return null;
+  const parsed: unknown = JSON.parse(raw, (key, value) => {
+    if (FORBIDDEN_KEYS.has(key)) return undefined;
+    return value;
+  });
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  return parsed as Record<string, unknown>;
+}
 
 export const DEFAULT_SETTINGS: GameSettings = {
   masterVolume: 0.42,
@@ -78,6 +108,8 @@ const VALID_RECORD_IDS = new Set<SoundRecordId>([
   'senhor_das_tempestades',
   'mestre_das_iscas',
   'campeao_da_tundavala',
+  'cacador_de_andar',
+  'lenda_do_pinaculo',
 ]);
 
 const VALID_DIARY_IDS = new Set<SoundDiaryId>([
@@ -87,6 +119,9 @@ const VALID_DIARY_IDS = new Set<SoundDiaryId>([
   'diario_pacto_palanca',
   'diario_huila_broadcast',
   'diario_juramento_nzinga',
+  'diario_cuanza_viaduto',
+  'diario_benguela_submersa',
+  'diario_aincrad_kalahari',
 ]);
 
 const DEFAULT_PROGRESS: SaveProgress = {
@@ -123,7 +158,7 @@ function sanitizeSettings(raw: unknown): GameSettings {
     typeof r.reducedEffects === 'boolean' ? r.reducedEffects : DEFAULT_SETTINGS.reducedEffects;
 
   const difficulty =
-    r.difficulty === 'padrao' || r.difficulty === 'implacavel'
+    r.difficulty === 'padrao' || r.difficulty === 'implacavel' || r.difficulty === 'aincrad'
       ? r.difficulty
       : DEFAULT_SETTINGS.difficulty;
 
@@ -177,26 +212,17 @@ export function loadProgress(): SaveProgress {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return {
-        ...DEFAULT_PROGRESS,
-        settings: { ...DEFAULT_SETTINGS },
-        bestScores: {},
-      };
+      return createDefaultProgress();
     }
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {
-        ...DEFAULT_PROGRESS,
-        settings: { ...DEFAULT_SETTINGS },
-        bestScores: {},
-      };
+    const obj = safeParseJsonObject(raw);
+    if (!obj) {
+      return createDefaultProgress();
     }
-    const obj = parsed as Record<string, unknown>;
     const unlockedLevel =
       typeof obj.unlockedLevel === 'number' &&
       Number.isInteger(obj.unlockedLevel) &&
       obj.unlockedLevel >= 1 &&
-      obj.unlockedLevel <= 3
+      obj.unlockedLevel <= TOTAL_LEVELS
         ? obj.unlockedLevel
         : 1;
 
@@ -223,8 +249,8 @@ export function loadProgress(): SaveProgress {
     const bestScores: SaveProgress['bestScores'] = {};
     if (obj.bestScores && typeof obj.bestScores === 'object' && !Array.isArray(obj.bestScores)) {
       const rawScores = obj.bestScores as Record<string, unknown>;
-      for (const key of ['1', '2', '3']) {
-        const entry = rawScores[key];
+      for (const key of ['1', '2', '3', '4', '5', '6']) {
+        const entry = Object.prototype.hasOwnProperty.call(rawScores, key) ? rawScores[key] : undefined;
         if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
           const rec = entry as Record<string, unknown>;
           if (
@@ -241,7 +267,7 @@ export function loadProgress(): SaveProgress {
                 : undefined;
             bestScores[Number(key)] = {
               timeSec: Math.max(0, Math.round(rec.timeSec)),
-              crystals: Math.max(0, Math.min(3, Math.round(rec.crystals))),
+              crystals: Math.max(0, Math.min(4, Math.round(rec.crystals))),
               detections: Math.max(0, Math.round(rec.detections)),
               ...(harmony !== undefined ? { harmony } : {}),
             };
@@ -262,17 +288,30 @@ export function loadProgress(): SaveProgress {
       bestScores,
     };
   } catch {
-    return {
-      ...DEFAULT_PROGRESS,
-      settings: { ...DEFAULT_SETTINGS },
-      bestScores: {},
-    };
+    return createDefaultProgress();
   }
 }
 
 export function persistProgress(progress: SaveProgress): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+    const ownedItems = sanitizeItemList(progress.ownedItems);
+    const safePayload: SaveProgress = {
+      unlockedLevel: Math.max(1, Math.min(TOTAL_LEVELS, Math.round(progress.unlockedLevel || 1))),
+      echoShards: Math.max(0, Math.min(9999, Math.round(progress.echoShards || 0))),
+      selectedCharacter: VALID_CHARACTER_IDS.has(progress.selectedCharacter)
+        ? progress.selectedCharacter
+        : 'nzinga',
+      ownedItems,
+      equippedItems: sanitizeItemList(progress.equippedItems).filter((id) => ownedItems.includes(id)),
+      unlockedRecords: sanitizeRecordList(progress.unlockedRecords),
+      collectedDiaries: sanitizeDiaryList(progress.collectedDiaries),
+      settings: sanitizeSettings(progress.settings),
+      bestScores: progress.bestScores ?? {},
+    };
+    const serialized = JSON.stringify(safePayload);
+    if (serialized.length <= MAX_STORAGE_BYTES) {
+      window.localStorage.setItem(STORAGE_KEY, serialized);
+    }
   } catch {
     // Storage quota or restricted browsing mode; fail safely without throwing
   }
@@ -290,11 +329,11 @@ export function getHarmonyEnding(harmony: number): {
     return {
       tier: 'harmonia_pura',
       title: 'Harmonia Pura',
-      finalTitle: 'Final Luminoso · Sinfonia do Silêncio',
+      finalTitle: 'Final Luminoso · Sinfonia de Aincrad-Angola',
       description:
-        'Seus passos camuflados e disciplina respiratória mantiveram o ecossistema acústico intacto.',
+        'Seus passos camuflados, Sword Skills precisas e disciplina mantiveram o ecossistema em equilíbrio.',
       finalDescription:
-        'Diante do silêncio absoluto de Nzinga e da Palanca Negra Kimbamba, as feras cegas recuam em reverência. A paz sonora retorna às falésias de Angola.',
+        'Com o Arquiteto Carmesim derrotado em reverência ao silêncio de Nzinga e Kimbamba, a paz sonora retorna do Maiombe ao Pináculo de Kalahari.',
       shardBonus: 2,
     };
   }
@@ -304,9 +343,9 @@ export function getHarmonyEnding(harmony: number): {
       title: 'Equilíbrio Instável',
       finalTitle: 'Final Neutro · Eco Dividido',
       description:
-        'Você alternou entre furtividade calculada e corridas arriscadas para cruzar o território.',
+        'Você alternou entre furtividade calculada, saques de Zona Segura e golpes decisivos para vencer.',
       finalDescription:
-        'A expedição sobrevive e alcança o refúgio da Tundavala, mas os ecos deixados pelo caminho mantêm os predadores vigilantes na fronteira.',
+        'A expedição conquista o Pináculo Aincrad-Kalahari, mas os ecos da batalha mantêm os guardiões restantes em vigília na fronteira.',
       shardBonus: 1,
     };
   }
@@ -315,9 +354,9 @@ export function getHarmonyEnding(harmony: number): {
     title: 'Dissonância Caótica',
     finalTitle: 'Final Sombrio · Cacofonia Eterna',
     description:
-      'Ruídos excessivos, corridas expostas e bandos espantados quebraram a harmonia da região.',
+      'Ruídos excessivos, combates abertos e revoadas quebraram a harmonia da região.',
     finalDescription:
-      'Embora a equipa tenha escapado por pouco, a cacofonia despertou os Colossos e Sereias da serra, mergulhando Angola em vigília perpétua.',
+      'Embora a equipa tenha escapado pela Zona Segura final, a cacofonia despertou novas torres de predadores pelas terras angolanas.',
     shardBonus: 0,
   };
 }
@@ -331,7 +370,7 @@ export function saveLevelCompletion(
   earnedRecordIds: SoundRecordId[] = []
 ): { progress: SaveProgress; newlyUnlockedRecords: SoundRecordId[] } {
   const current = loadProgress();
-  const nextUnlocked = Math.min(3, Math.max(current.unlockedLevel, levelId + 1));
+  const nextUnlocked = Math.min(TOTAL_LEVELS, Math.max(current.unlockedLevel, levelId + 1));
   const prev = current.bestScores[levelId];
   const clampedHarmony = Math.max(0, Math.min(100, Math.round(harmony)));
 
@@ -369,7 +408,7 @@ export function saveLevelCompletion(
       [levelId]: isBetter
         ? {
             timeSec: Math.max(0, Math.round(timeSec)),
-            crystals: Math.max(0, Math.min(3, crystals)),
+            crystals: Math.max(0, Math.min(4, crystals)),
             detections: Math.max(0, detections),
             harmony: clampedHarmony,
           }
@@ -394,4 +433,3 @@ export function saveDiaryCollected(diaryId: SoundDiaryId): SaveProgress {
   persistProgress(updated);
   return updated;
 }
-

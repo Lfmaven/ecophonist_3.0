@@ -30,7 +30,7 @@ export default function App() {
   const [progress, setProgress] = useState<SaveProgress>(() => loadProgress());
   const [selectedLevelId, setSelectedLevelId] = useState<number>(() => {
     const saved = loadProgress();
-    return Math.min(3, Math.max(1, saved.unlockedLevel));
+    return Math.min(LEVELS.length, Math.max(1, saved.unlockedLevel));
   });
   const [modalTab, setModalTab] = useState<'settings' | 'store' | null>(null);
   const [showBestiary, setShowBestiary] = useState(false);
@@ -209,6 +209,7 @@ export default function App() {
           onCollectDiary={handleCollectDiary}
           onCompleteLevel={handleCompleteLevel}
           onGoNextLevel={handleGoNextLevel}
+          isExternalModalOpen={Boolean(modalTab || manualTab || showBestiary || showRecords || showDiaries)}
         />
       )}
 

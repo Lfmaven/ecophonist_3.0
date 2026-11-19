@@ -45,9 +45,9 @@ export const ManualLoreModal: React.FC<ManualLoreModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2 id="manual-lore-title" className="font-display text-2xl font-extrabold text-white">
               Crónicas & Manual de Sobrevivência
@@ -143,35 +143,60 @@ export const ManualLoreModal: React.FC<ManualLoreModalProps> = ({
                 </p>
               </section>
 
-              {/* Os Três Atos */}
+              {/* Os Seis Atos */}
               <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
-                  <div className="text-xs font-mono-tabular text-cyan-300 font-semibold">
-                    ATO I · FLORESTA DO MAIOMBE
+                  <div className="text-xs font-mono-tabular text-emerald-300 font-semibold">
+                    ATO I · FLORESTA DO MAIOMBE (ANDAR 01)
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Entre imbondeiros antigos e ruínas cobertas de neblina, a equipa aprende a
-                    sincronizar passos com a brisa para alcançar o Santuário de Mbanza sem despertar
-                    os primeiros Rastreadores Cegos.
+                    Corredor verde de 2800px onde a expedição saqueia suas primeiras caixas táticas
+                    e enfrenta Kagachi Alfa no Santuário de Mbanza.
                   </p>
                 </div>
                 <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
                   <div className="text-xs font-mono-tabular text-amber-300 font-semibold">
-                    ATO II · MIRADOURO DA LUA
+                    ATO II · MIRADOURO DA LUA (ANDAR 02)
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Cânions secos onde comboios blindados tombaram. Sereias Ressonantes, bandos de
-                    tecelões e o temível Colosso Tambor exigem o domínio do Sussurro na Folha e dos
-                    Seixos de Isca.
+                    Cânions lunares vigiados por tecelões e Colossos. A Sereia-Mãe das Falésias
+                    bloqueia a saída até ser derrotada.
                   </p>
                 </div>
                 <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
-                  <div className="text-xs font-mono-tabular text-rose-300 font-semibold">
-                    ATO III · FENDA DA TUNDAVALA
+                  <div className="text-xs font-mono-tabular text-sky-300 font-semibold">
+                    ATO III · FENDA DA TUNDAVALA (ANDAR 03)
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Sob as trovoadas da Huíla e rajadas cortantes do Namibe, apenas o Canto do
-                    Silêncio e o respeito ao ritmo da terra decidirão o destino sonoro de Angola.
+                    Sob trovoadas do Kwanza e Zona Segura retrátil, Kagachi da Fenda testa o domínio
+                    do Canto do Silêncio [R].
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
+                  <div className="text-xs font-mono-tabular text-amber-400 font-semibold">
+                    ATO IV · VIADUTO DO CUANZA · SETOR BERMUDA
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Autoestrada de concreto e airdrops táticos onde o Sentinela Blindado de Bermuda
+                    patrulha sob Zona Segura acelerada.
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
+                  <div className="text-xs font-mono-tabular text-purple-300 font-semibold">
+                    ATO V · CIDADELA DE BENGUELA · PURGATÓRIO
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Ruínas enevoadas onde o Colosso Gleam-Eyes da Huíla guarda os Diários finais da
+                    anomalia sonora.
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
+                  <div className="text-xs font-mono-tabular text-rose-400 font-semibold">
+                    ATO VI · PINÁCULO AINCRAD-KALAHARI (FINAL)
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Andar supremo de tempestade extrema, airdrops lendários e 5 barras de vida do
+                    Arquiteto Carmesim do Silêncio.
                   </p>
                 </div>
               </section>
@@ -233,13 +258,25 @@ export const ManualLoreModal: React.FC<ManualLoreModalProps> = ({
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80">
                     <span className="font-mono-tabular text-white font-semibold">Q ou Clique</span>
-                    <span className="text-slate-400"> — Lançar Seixo de Isca para desviar feras</span>
+                    <span className="text-slate-400"> — Lançar Seixo de Isca / dano de postura</span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80">
+                    <span className="font-mono-tabular text-sky-300 font-semibold">1 · Sonic Leap</span>
+                    <span className="text-slate-400"> — Dash com i-frames e corte (25 Energia)</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80">
+                    <span className="font-mono-tabular text-rose-300 font-semibold">2 · Vorpal Strike</span>
+                    <span className="text-slate-400"> — Golpe em arco pesado / atordoar (40 Energia)</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80">
+                    <span className="font-mono-tabular text-emerald-300 font-semibold">H · Kit Médico</span>
+                    <span className="text-slate-400"> — Cura +1 HP usando kit coletado</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80 sm:col-span-2">
                     <span className="font-mono-tabular text-white font-semibold">E / R / F / Esc</span>
                     <span className="text-slate-400">
                       {' '}
-                      — Sussurro · Silêncio · Captura Sonora · Pausar
+                      — Sussurro na Folha · Canto do Silêncio · Captura Sonora · Pausar
                     </span>
                   </div>
                 </div>
@@ -319,14 +356,14 @@ export const ManualLoreModal: React.FC<ManualLoreModalProps> = ({
                 <div className="p-4 rounded-xl bg-slate-900/70 border border-emerald-500/30 space-y-2">
                   <div className="flex items-center gap-2 text-emerald-300 font-semibold text-xs">
                     <Award className="w-4 h-4" />
-                    7. Bestiário, Registros & Microfone
+                    7. Zona Segura, Caixas & Chefes de Andar
                   </div>
                   <p className="text-xs text-slate-300">
-                    Consulte o <strong>Bestiário Sonoro</strong> no menu para ouvir a assinatura de
-                    cada criatura antes da missão. Conclua proezas nos{' '}
-                    <strong>Registros Sonoros</strong> para ganhar passivos permanentes em todos os
-                    personagens. Em <strong>Configurações</strong>, você pode ativar o Sonar Reativo
-                    ao seu microfone real!
+                    Use o <strong>Mini-Radar</strong> no canto superior direito para antecipar o
+                    fechamento da <strong>Zona Segura</strong> (anel rosa/branco) e localizar{' '}
+                    <strong>Caixas de Suprimento</strong> (Coletes de Escudo, Kits Médicos,
+                    Energia). Ao fim do mapa de 2800px, quebre a postura do{' '}
+                    <strong>Chefe de Andar</strong> para abrir o Portal do Santuário!
                   </p>
                 </div>
               </section>

@@ -16,10 +16,18 @@ export const SoundDiariesModal: React.FC<SoundDiariesModalProps> = ({
   const [playingId, setPlayingId] = useState<SoundDiaryId | null>(null);
 
   useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        soundEngine.stopDiaryNarration();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
     return () => {
+      window.removeEventListener('keydown', onKeyDown);
       soundEngine.stopDiaryNarration();
     };
-  }, []);
+  }, [onClose]);
 
   useEffect(() => {
     if (!playingId) return;
@@ -48,10 +56,16 @@ export const SoundDiariesModal: React.FC<SoundDiariesModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="diaries-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          soundEngine.stopDiaryNarration();
+          onClose();
+        }
+      }}
     >
-      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2 id="diaries-modal-title" className="font-display text-2xl font-extrabold text-white">
               Diários Sonoros · Memórias de Nzinga & Angola

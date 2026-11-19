@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Award, Check, CircleDot, CloudRain, EarOff, Lock, Sparkles, Wind, X } from 'lucide-react';
 import { SOUND_RECORDS } from '../game/records';
 import { SoundRecordDef, SoundRecordId } from '../game/types';
@@ -32,16 +32,27 @@ export const SoundRecordsModal: React.FC<SoundRecordsModalProps> = ({
 }) => {
   const unlockedCount = unlockedRecords.length;
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 bg-[#05070C]/88 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="records-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="max-w-4xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2 id="records-modal-title" className="font-display text-2xl font-extrabold text-white">
               Registros Sonoros · Emblemas & Passivos

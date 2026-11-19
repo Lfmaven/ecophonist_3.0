@@ -7,11 +7,22 @@
     --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   }
 
+  html,
+  body {
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
     font-family: var(--font-sans);
     background-color: #07090F;
     color: #F1F5F9;
     overflow-x: hidden;
+  }
+
+  button,
+  [role='button'] {
+    touch-action: manipulation;
   }
 }
 
@@ -22,6 +33,15 @@
 .font-mono-tabular {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 .sao-frame {

@@ -98,6 +98,9 @@ export const AcousticPhotoModal: React.FC<AcousticPhotoModalProps> = ({ snapshot
       sourceImgRef.current = img;
       setImgLoaded(true);
     };
+    img.onerror = () => {
+      setFeedbackMsg('Não foi possível processar a prévia da captura.');
+    };
     img.src = snapshot.sourceDataUrl;
   }, [snapshot.sourceDataUrl]);
 
@@ -381,14 +384,19 @@ export const AcousticPhotoModal: React.FC<AcousticPhotoModalProps> = ({ snapshot
   const handleDownloadPng = () => {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
-    const url = canvas.toDataURL('image/png');
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ecophonist-ato-${snapshot.levelId}-${selectedFilter}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setFeedbackMsg('Captura PNG salva no dispositivo.');
+    try {
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ecophonist-ato-${snapshot.levelId}-${selectedFilter}.png`;
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setFeedbackMsg('Captura PNG salva no dispositivo.');
+    } catch {
+      setFeedbackMsg('Não foi possível exportar a imagem neste navegador.');
+    }
   };
 
   const handleCopyImage = async () => {
@@ -456,9 +464,9 @@ export const AcousticPhotoModal: React.FC<AcousticPhotoModalProps> = ({ snapshot
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="max-w-5xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="max-w-5xl w-full bg-[#0C1220] border border-slate-700/90 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2
               id="photo-mode-title"
@@ -602,7 +610,9 @@ export const AcousticPhotoModal: React.FC<AcousticPhotoModalProps> = ({ snapshot
                   type="text"
                   maxLength={70}
                   value={customCaption}
-                  onChange={(e) => setCustomCaption(e.target.value)}
+                  onChange={(e) =>
+                    setCustomCaption(e.target.value.replace(/[\u0000-\u001F\u007F]/g, '').slice(0, 70))
+                  }
                   placeholder="Ex.: Silêncio absoluto sob neblina no Namibe"
                   className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-cyan-400"
                 />

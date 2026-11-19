@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Sliders, ShoppingBag, Check, Mic, Volume2, Sparkles } from 'lucide-react';
 import { STORE_ITEMS } from '../game/storage';
 import { GameSettings, StoreItemId } from '../game/types';
@@ -46,21 +46,32 @@ export const SettingsStoreModal: React.FC<SettingsStoreModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 bg-[#05070C]/85 backdrop-blur-sm flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Configurações e Arsenal de Ressonância"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="max-w-2xl w-full bg-[#0C111E] border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="max-w-2xl w-full bg-[#0C111E] border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 p-1 bg-slate-900 rounded-lg border border-slate-800">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2.5 sm:gap-4">
+          <div className="flex items-center gap-1.5 sm:gap-2 p-1 bg-slate-900 rounded-lg border border-slate-800">
             <button
               type="button"
               onClick={() => setTab('settings')}
-              className={`px-3.5 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
                 tab === 'settings'
                   ? 'bg-slate-800 text-cyan-300'
                   : 'text-slate-400 hover:text-slate-100'
@@ -72,18 +83,18 @@ export const SettingsStoreModal: React.FC<SettingsStoreModalProps> = ({
             <button
               type="button"
               onClick={() => setTab('store')}
-              className={`px-3.5 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
                 tab === 'store'
                   ? 'bg-slate-800 text-amber-300'
                   : 'text-slate-400 hover:text-slate-100'
               }`}
             >
               <ShoppingBag className="w-3.5 h-3.5" />
-              Arsenal Gratuito (0 Kz)
+              Arsenal (0 Kz)
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 ml-auto">
             <span className="text-xs text-emerald-300 font-mono-tabular whitespace-nowrap">
               Fragmentos: {echoShards}
             </span>
@@ -155,29 +166,42 @@ export const SettingsStoreModal: React.FC<SettingsStoreModalProps> = ({
 
               {/* Dificuldade Acústica */}
               <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-200">Rigor Auditivo dos Predadores</p>
-                <div className="grid grid-cols-2 gap-2">
+                <p className="text-sm font-medium text-slate-200">
+                  Dificuldade (Rigor Auditivo, Chefes & Zona Segura)
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => onUpdateSettings({ ...settings, difficulty: 'padrao' })}
-                    className={`py-2.5 px-4 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
+                    className={`py-2.5 px-3.5 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
                       settings.difficulty === 'padrao'
                         ? 'bg-emerald-400/15 border-emerald-400 text-emerald-200'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Padrão · Alcance equilibrado
+                    Padrão · Ritmo equilibrado
                   </button>
                   <button
                     type="button"
                     onClick={() => onUpdateSettings({ ...settings, difficulty: 'implacavel' })}
-                    className={`py-2.5 px-4 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
+                    className={`py-2.5 px-3.5 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
                       settings.difficulty === 'implacavel'
-                        ? 'bg-rose-400/15 border-rose-400 text-rose-200'
+                        ? 'bg-amber-400/15 border-amber-400 text-amber-200'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Implacável · +22% audição e velocidade
+                    Implacável · +22% audição & zona ágil
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ ...settings, difficulty: 'aincrad' })}
+                    className={`py-2.5 px-3.5 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer ${
+                      settings.difficulty === 'aincrad'
+                        ? 'bg-rose-500/20 border-rose-400 text-rose-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Aincrad Extremo · Chefes & tempestade letal
                   </button>
                 </div>
               </div>

@@ -678,12 +678,15 @@ class AcousticSoundEngine {
     if (!ctx || !this.masterGain) return;
     const now = ctx.currentTime;
 
-    const freqs =
-      levelId === 1
-        ? [261.63, 329.63, 392.0]
-        : levelId === 2
-          ? [293.66, 369.99, 440.0]
-          : [220.0, 277.18, 329.63, 440.0];
+    const chordMap: Record<number, number[]> = {
+      1: [261.63, 329.63, 392.0],
+      2: [293.66, 369.99, 440.0],
+      3: [220.0, 277.18, 329.63, 440.0],
+      4: [246.94, 311.13, 369.99, 493.88],
+      5: [196.0, 246.94, 293.66, 392.0],
+      6: [207.65, 261.63, 311.13, 415.3, 523.25],
+    };
+    const freqs = chordMap[levelId] ?? chordMap[1];
 
     freqs.forEach((f, idx) => {
       const t = now + idx * 0.09;
@@ -701,6 +704,181 @@ class AcousticSoundEngine {
       osc.start(t);
       osc.stop(t + 1.2);
     });
+  }
+
+  public playSwordSkill(kind: 'leap' | 'vorpal'): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    osc.type = kind === 'vorpal' ? 'sawtooth' : 'triangle';
+    osc.frequency.setValueAtTime(kind === 'vorpal' ? 620 : 480, now);
+    osc.frequency.exponentialRampToValueAtTime(kind === 'vorpal' ? 1480 : 1180, now + 0.09);
+    osc.frequency.exponentialRampToValueAtTime(kind === 'vorpal' ? 280 : 360, now + 0.26);
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(kind === 'vorpal' ? 0.22 : 0.16, now + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+
+    if (this.noiseBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'bandpass';
+      hp.frequency.setValueAtTime(2200, now);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.18, now);
+      ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      src.connect(hp);
+      hp.connect(ng);
+      ng.connect(this.masterGain);
+      src.start(now, 0, 0.17);
+    }
+  }
+
+  public playCrateOpen(): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+    const notes = [523.25, 659.25, 987.77];
+    notes.forEach((f, idx) => {
+      const t = now + idx * 0.045;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(t);
+      osc.stop(t + 0.24);
+    });
+  }
+
+  public playMedkitHeal(): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+    [440, 554.37, 659.25].forEach((f, idx) => {
+      const t = now + idx * 0.06;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.12, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+      osc.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(t);
+      osc.stop(t + 0.27);
+    });
+  }
+
+  public playBossRoar(): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(165, now);
+    osc.frequency.exponentialRampToValueAtTime(48, now + 0.45);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.24, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+
+  public playBossDefeat(): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+    const fanfare = [392.0, 493.88, 587.33, 783.99, 1046.5];
+    fanfare.forEach((f, idx) => {
+      const t = now + idx * 0.075;
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, t);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.16, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+      osc.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(t);
+      osc.stop(t + 0.6);
+    });
+  }
+
+  public playSafeZoneAlert(kind: 'countdown' | 'closing'): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+    const tones = kind === 'closing' ? [587.33, 440, 587.33] : [698.46, 880];
+    tones.forEach((freq, idx) => {
+      const t = now + idx * 0.11;
+      const osc = ctx.createOscillator();
+      osc.type = kind === 'closing' ? 'sawtooth' : 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1400, t);
+
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(kind === 'closing' ? 0.1 : 0.075, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+
+      osc.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+  }
+
+  public playSafeZoneStaticDamage(): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.masterGain) return;
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(125, now);
+    osc.frequency.exponentialRampToValueAtTime(62, now + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.11, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+
+    if (this.noiseBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(1950, now);
+      bp.Q.setValueAtTime(2.4, now);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.09, now);
+      ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+      src.connect(bp);
+      bp.connect(ng);
+      ng.connect(this.masterGain);
+      src.start(now, 0, 0.16);
+    }
   }
 }
 
